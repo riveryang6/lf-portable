@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="CodexPortable.Launcher"
-    version="1.4.24.1"
+    version="1.4.24.2"
     processorArchitecture="*" />
 
   <!-- Portable operations are scoped to the selected portable root. Keep the

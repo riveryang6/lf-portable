@@ -46,7 +46,7 @@ src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.1
+  --version 1.4.24.2
 ```
 
 The command creates two runnable directories and matching offline archives:
@@ -122,12 +122,12 @@ release has two program assets: `LFPortable-x64.zip` and `LFPortable-arm64.zip`.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.1"
-git tag -a v1.4.24.1 -m "LF Portable 1.4.24.1"
-git push origin main v1.4.24.1
+git commit -m "Release LF Portable 1.4.24.2"
+git tag -a v1.4.24.2 -m "LF Portable 1.4.24.2"
+git push origin main v1.4.24.2
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.1
+  --version 1.4.24.2
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

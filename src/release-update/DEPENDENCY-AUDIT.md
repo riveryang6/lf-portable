@@ -1,6 +1,6 @@
 # Portable Dependency Audit
 
-This audit covers the common runtime archive used by LF Portable 1.4.24.1:
+This audit covers the common runtime archive used by LF Portable 1.4.24.2:
 `release/CodexData/packages/LFPortable-common.zip`. The archive is deliberately
 self-contained. Host preparation copies the required entries into a
 machine-local fixed-disk execution image and package cache before USB
@@ -58,9 +58,10 @@ packages: `LFPortable-x64.zip` and `LFPortable-arm64.zip`. Each package carries
 the common ZIP and only its matching official MSIX, while retaining all
 portable feature libraries for host preparation and clean-machine/Sandbox use.
 
-The current bundled MSIX manifests are `OpenAI.Codex` version `26.814.5167.0`
-for both x64 and ARM64 (the same version is advertised by the official
-endpoint headers).
+The current bundled MSIX manifests are `OpenAI.Codex` version `26.818.5229.0`
+for both x64 and ARM64. The packages were retrieved from the official
+Microsoft Store delivery service on 2026-08-23 and their manifests and
+signatures were inspected before release assembly.
 
 No library is downloaded, installed, or updated during first launch. The
 supported USB/Sandbox release is therefore fully offline; a CDN is an optional

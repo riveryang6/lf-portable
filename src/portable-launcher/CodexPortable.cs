@@ -26,8 +26,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.1")]
-[assembly: AssemblyFileVersion("1.4.24.1")]
+[assembly: AssemblyVersion("1.4.24.2")]
+[assembly: AssemblyFileVersion("1.4.24.2")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -2209,15 +2209,15 @@ namespace CodexPortable
         private static readonly string PortableSparkleGateText =
             "p=e=>!0".PadRight(OfficialSparkleGateText.Length);
         private const string OfficialWorkerSparkleGateText =
-            "Hhe=e=>e.CODEX_SPARKLE_ENABLED===`false`";
+            "Vhe=e=>e.CODEX_SPARKLE_ENABLED===`false`";
         private static readonly string PortableWorkerSparkleGateText =
             "Hhe=e=>!0".PadRight(OfficialWorkerSparkleGateText.Length);
         private const string OfficialUpdateMenuHandlerText =
-            "}),enabled:!0,click:()=>{E5().info(`Check for updates requested via menu.`),u.checkForUpdates().then(()=>{if(u.hasUpdater())return;let e=u.getUnavailableReason()??`unknown`;E5().warning(`Desktop updater unavailable; init likely skipped.`,{safe:{reason:e},sensitive:{}}),l.dialog.showMessageBox({type:`info`,title:`Updates Unavailable`,message:`Automatic updates are unavailable right now.`,detail:`Updater initialization skipped: ${e}`})})}}";
+            "enabled:!0,click:()=>{D5().info(`Check for updates requested via menu.`),u.checkForUpdates().then(()=>{if(u.hasUpdater())return;let e=u.getUnavailableReason()??`unknown`;D5().warning(`Desktop updater unavailable; init likely skipped.`,{safe:{reason:e},sensitive:{}}),l.dialog.showMessageBox({type:`info`,title:`Updates Unavailable`,message:`Automatic updates are unavailable right now.`,detail:`Updater initialization skipped: ${e}`})})}}";
         private static readonly string PortableUpdateMenuHandlerText =
-            "}),visible:!1,click:()=>{}}".PadRight(OfficialUpdateMenuHandlerText.Length);
+            "visible:!1,click:()=>{}}".PadRight(OfficialUpdateMenuHandlerText.Length);
         private const string OfficialRecoveryStateText =
-            "i=Y(gOi);switch(n??i)";
+            "i=Y(bMi);switch(n??i)";
         private static readonly string PortableRecoveryStateText =
             ("i=null;").PadRight(OfficialRecoveryStateText.Length - "switch(n??i)".Length) +
             "switch(n??i)";
@@ -2232,7 +2232,7 @@ namespace CodexPortable
         // to the exact upstream implementation so an unrecognized bundle
         // fails closed instead of being partially patched.
         private const string OfficialRuntimeStaticDisabledReasonText =
-            "getStaticDisabledReason(){return this.options.hostId===`local`?this.options.sharedObjectRepository?.get(`codex_runtimes_config`)==null?`runtime-config-missing`:n0(this.options.sharedObjectRepository?.get(`statsig_default_enable_features`))?null:`feature-gate-disabled`:`not-local-host`";
+            "getStaticDisabledReason(){return this.options.hostId===`local`?this.options.sharedObjectRepository?.get(`codex_runtimes_config`)==null?`runtime-config-missing`:e0(this.options.sharedObjectRepository?.get(`statsig_default_enable_features`))?null:`feature-gate-disabled`:`not-local-host`";
         private static readonly string PortableRuntimeStaticDisabledReasonText =
             "getStaticDisabledReason(){return`portable-runtime-updates-disabled`".
                 PadRight(OfficialRuntimeStaticDisabledReasonText.Length);
@@ -2242,15 +2242,15 @@ namespace CodexPortable
             "async#e(e){throw Error(`portable-runtime-updates-disabled`)}".
                 PadRight(OfficialRuntimeInstallGuardText.Length);
         private const string OfficialRuntimeDebugMenuGateText =
-            "T=o?(0,Q.jsx)(yr,{align:`end`,triggerButton:";
+            "T=o?(0,Q.jsx)(xt,{align:`end`,triggerButton:";
         private const string PortableRuntimeDebugMenuGateText =
-            "T=0?(0,Q.jsx)(yr,{align:`end`,triggerButton:";
+            "T=0?(0,Q.jsx)(xt,{align:`end`,triggerButton:";
         private const string WorkspaceDependenciesSettingsFunctionText =
-            "function pr(e){let t=(0,Or.c)(98),";
+            "function pr(e){return e.name===f}";
         private const string OfficialWorkspaceDependenciesSettingsPanelGateText =
-            "o&&n.kind===`local`?(0,$.jsx)(fr,{hostId:t}):null";
+            "a&&n.kind===`local`?(0,$.jsx)(dr,{hostId:t}):null";
         private const string PortableWorkspaceDependenciesSettingsPanelGateText =
-            "0&&n.kind===`local`?(0,$.jsx)(fr,{hostId:t}):null";
+            "0&&n.kind===`local`?(0,$.jsx)(dr,{hostId:t}):null";
         // Codex normally collapses a config.toml permission pair into a built-in
         // mode when their effective permissions are identical. LF keeps the
         // config-backed mode explicit so the UI and the execution source agree.
@@ -2278,34 +2278,34 @@ namespace CodexPortable
         // without ChatGPT authentication, so both gates must keep the three
         // plugins available and let their local capability checks decide at use time.
         private const string OfficialBrowserPluginAvailabilityText =
-            "function NPr({isBrowserAgentGateEnabled:e,isBrowserSidebarEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return a===`chrome-extension`?`window-type-disabled`:r?`loading`:t?e?n?i?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`:`browser-pane-disabled`}";
+            "function ELr({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return a===`chrome-extension`?`window-type-disabled`:r?`loading`:t?e?n?i?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`:`browser-pane-disabled`}";
         private static readonly string PortableBrowserPluginAvailabilityText =
-            "function NPr({isBrowserAgentGateEnabled:e,isBrowserSidebarEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return`available`}".
+            "function ELr({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return`available`}".
                 PadRight(OfficialBrowserPluginAvailabilityText.Length);
         private const string OfficialChromePluginAvailabilityText =
-            "function vPr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
+            "function oLr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
         private static readonly string PortableChromePluginAvailabilityText =
-            "function vPr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return`available`}".
+            "function oLr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return`available`}".
                 PadRight(OfficialChromePluginAvailabilityText.Length);
         private const string OfficialComputerUsePluginAvailabilityText =
-            "function ZNr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return t?o===`electron`?r?a?`loading`:i?n?`loading`:e?`available`:`config-requirement-disabled`:`unsupported-platform`:`statsig-disabled`:`window-type-disabled`:`disabled`}";
+            "function nLr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return t?o===`electron`?r?a?`loading`:i?n?`loading`:e?`available`:`config-requirement-disabled`:`unsupported-platform`:`statsig-disabled`:`window-type-disabled`:`disabled`}";
         private static readonly string PortableComputerUsePluginAvailabilityText =
-            "function ZNr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return`available`}".
+            "function nLr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return`available`}".
                 PadRight(OfficialComputerUsePluginAvailabilityText.Length);
         private const string OfficialBrowserPluginReconcileAvailabilityText =
-            "{...n.Ds.browser,autoInstallOptOutKey:n.As(n.Ds.browser.name),isAvailable:({features:e})=>e.inAppBrowserUseAllowed||e.externalBrowserUseAllowed,migrate:Ds}";
+            "{...n.Os.browser,autoInstallOptOutKey:n.js(n.Os.browser.name),isAvailable:({features:e})=>e.inAppBrowserUseAllowed||e.externalBrowserUseAllowed,migrate:ks}";
         private static readonly string PortableBrowserPluginReconcileAvailabilityText =
-            "{...n.Ds.browser,autoInstallOptOutKey:n.As(n.Ds.browser.name),isAvailable:()=>!0,migrate:Ds}".
+            "{...n.Os.browser,autoInstallOptOutKey:n.js(n.Os.browser.name),isAvailable:()=>!0,migrate:ks}".
                 PadRight(OfficialBrowserPluginReconcileAvailabilityText.Length);
         private const string OfficialChromePluginReconcileAvailabilityText =
-            "{...n.Ds.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&s.l(e)}";
+            "{...n.Os.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&s.f(e)}";
         private static readonly string PortableChromePluginReconcileAvailabilityText =
-            "{...n.Ds.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:()=>!0}".
+            "{...n.Os.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:()=>!0}".
                 PadRight(OfficialChromePluginReconcileAvailabilityText.Length);
         private const string OfficialComputerUsePluginReconcileAvailabilityText =
-            "{...n.Ds.computerUse,autoInstallOptOutKey:n.As(n.Ds.computerUse.name),isAvailable:({features:e,platform:t})=>t===`win32`&&e.computerUse}";
+            "{...n.Os.computerUse,autoInstallOptOutKey:n.js(n.Os.computerUse.name),isAvailable:({features:e,platform:t})=>t===`win32`&&e.computerUse}";
         private static readonly string PortableComputerUsePluginReconcileAvailabilityText =
-            "{...n.Ds.computerUse,autoInstallOptOutKey:n.As(n.Ds.computerUse.name),isAvailable:()=>!0}".
+            "{...n.Os.computerUse,autoInstallOptOutKey:n.js(n.Os.computerUse.name),isAvailable:()=>!0}".
                 PadRight(OfficialComputerUsePluginReconcileAvailabilityText.Length);
         // The signed desktop bundle also reconciles the Sites and Deep Research
         // plugins against feature flags.  LF ships these plugins locally and
@@ -2314,16 +2314,16 @@ namespace CodexPortable
         // removes two of the twelve required cache trees immediately after the
         // launcher repairs them.
         private const string OfficialSitesPluginReconcileAvailabilityText =
-            "{...n.Ds.sites,autoInstallOptOutKey:n.As(n.Ds.sites.name),syncToRemoteSshHosts:!0,isAvailable:({features:e})=>e.sites}";
+            "{...n.Os.sites,autoInstallOptOutKey:n.js(n.Os.sites.name),syncToRemoteSshHosts:!0,isAvailable:({features:e})=>e.sites}";
         private static readonly string PortableSitesPluginReconcileAvailabilityText =
-            "{...n.Ds.sites,autoInstallOptOutKey:n.As(n.Ds.sites.name),syncToRemoteSshHosts:!0,isAvailable:()=>!0}".
+            "{...n.Os.sites,autoInstallOptOutKey:n.js(n.Os.sites.name),syncToRemoteSshHosts:!0,isAvailable:()=>!0}".
                 PadRight(OfficialSitesPluginReconcileAvailabilityText.Length);
         private const string OfficialDeepResearchPluginReconcileAvailabilityText =
-            "{...n.Ds.deepResearch,isAvailable:({features:e})=>e.deepResearch}";
+            "{...n.Os.deepResearch,isAvailable:({features:e})=>e.deepResearch}";
         private static readonly string PortableDeepResearchPluginReconcileAvailabilityText =
-            "{...n.Ds.deepResearch,isAvailable:()=>!0}".
+            "{...n.Os.deepResearch,isAvailable:()=>!0}".
                 PadRight(OfficialDeepResearchPluginReconcileAvailabilityText.Length);
-        private const string OfficialSunsetUpdateGateText = "if(Px(`2929582856`)){";
+        private const string OfficialSunsetUpdateGateText = "if(hx(`2929582856`)){";
         private static readonly string PortableSunsetUpdateGateText =
             "if(!1".PadRight(OfficialSunsetUpdateGateText.Length - 2) + "){";
         private const string OfficialBrandText = "\"codexAppBrand\": \"chatgpt\"";
@@ -2331,7 +2331,7 @@ namespace CodexPortable
         private const string OfficialAumidText = "Prod:return`com.openai.codex`";
         private const string PortableAumidText = "Prod:return`OpenAI.Codex.USB`";
         private const string OfficialPortableUserDataResolverText =
-            "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(i)return(0,o.resolve)(i);let a=(0,o.join)(e,t.Pa(n)),s=r.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,o.join)(a,`agent`,s):a}";
+            "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(i)return(0,o.resolve)(i);let a=(0,o.join)(e,t.Fa(n)),s=r.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,o.join)(a,`agent`,s):a}";
         private static readonly string PortableUserDataResolverText =
             "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();return i&&r.CODEX_PORTABLE_ROOT?(0,o.resolve)(i):(a.dialog.showErrorBox(`LF Portable`,`Open CodexPortable.exe from the USB drive.`),process.exit(1))}".
                 PadRight(OfficialPortableUserDataResolverText.Length);
@@ -2347,18 +2347,18 @@ namespace CodexPortable
         private const string PortableWindowsLastWindowText =
             "o.app.on(`window-all-closed`,()=>{process.platform===`win32`";
         private const string OfficialWindowsWindowIconSelectorText =
-            "M=process.platform===`linux`?v5(i,e,E):null";
+            "M=process.platform===`linux`?y5(i,e,E):null";
         private const string PortableWindowsWindowIconSelectorText =
-            "M=process.platform===`win32`?v5(i,e,E):null";
+            "M=process.platform===`win32`?y5(i,e,E):null";
         private const string OfficialWindowsWindowIconResolverText =
-            "function v5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${iS(e,t)}.png`;";
-        private const string PortableWindowsWindowIconResolverText =
-            "function v5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${iS(e,t)}.ico`;";
+            "function y5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${fS(e,t)}.png`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,r);if((0,_.existsSync)(e))return e}let i=(0,p.join)(n,r);return(0,_.existsSync)(i)?i:null}";
+        private static readonly string PortableWindowsWindowIconResolverText =
+            "function y5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${iS(e,t)}.ico`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,r);if((0,_.existsSync)(e))return e}let i=(0,p.join)(n,r);return(0,_.existsSync)(i)?i:null}";
         private const string WebviewAssetPrefix = "webview/assets/";
         private const string AppInitialAssetStem = "app-initial";
         private const string OnboardingPageAssetStem = "onboarding-page";
         private const string OfficialStandardOnboardingGateText =
-            "shouldShowStandardOnboarding:y";
+            "shouldShowStandardOnboarding:_";
         private const string PortableStandardOnboardingGateText =
             "shouldShowStandardOnboarding:0";
         // The model-upgrade surface is independent of the standard onboarding
@@ -2367,46 +2367,46 @@ namespace CodexPortable
         // cannot reintroduce the initial "Try model" CTA while unrelated NUX
         // surfaces keep their normal behavior.
         private const string OfficialTryModelAvailabilityGateText =
-            "function Eel(){let e=(0,Oel.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=G7o();if(!r||t==null)return null;";
+            "function jdl(){let e=(0,Ndl.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=fss();if(!r||t==null)return null;";
         private const string PortableTryModelAvailabilityGateText =
-            "function Eel(){let e=(0,Oel.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=G7o();if(!0||t==null)return null;";
+            "function jdl(){let e=(0,Ndl.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=fss();if(!0||t==null)return null;";
         private const string OfficialTryModelUpgradeGateText =
-            "function Del(){let e=(0,Oel.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=K7o(),[i,a]=so(Z7o),{serviceTierSettings:o}=tZ(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=V8c(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,kel.useEffect)(f,p),!d||t==null||c==null)return null;";
+            "function Mdl(){let e=(0,Ndl.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=pss(),[i,a]=so(vss),{serviceTierSettings:o}=UX(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Gsl(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Pdl.useEffect)(f,p),!d||t==null||c==null)return null;";
         private const string PortableTryModelUpgradeGateText =
-            "function Del(){let e=(0,Oel.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=K7o(),[i,a]=so(Z7o),{serviceTierSettings:o}=tZ(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=V8c(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,kel.useEffect)(f,p),!0||t==null||c==null)return null;";
+            "function Mdl(){let e=(0,Ndl.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=pss(),[i,a]=so(vss),{serviceTierSettings:o}=UX(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Gsl(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Pdl.useEffect)(f,p),!0||t==null||c==null)return null;";
         private const string OnboardingMessageIdPrefix =
             "electron.onboarding.conversationalOnboarding.";
         private const string OfficialOnboardingBrandText = "ChatGPT";
         private const string PortableOnboardingBrandText = "Codex";
         private const string OfficialOnboardingHeaderIconText =
-            "p=c?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(dz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
+            "p=c?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(uz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
         private const string PortableOnboardingHeaderIconText =
-            "p=0?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(dz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
+            "p=0?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(uz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
         private const string OfficialWindowsSandboxSetupPendingGateText =
-            "isWindowsSandboxSetupPending:lr!=null&&ut";
+            "isWindowsSandboxSetupPending:fr!=null&&pt";
         private static readonly string PortableWindowsSandboxSetupPendingGateText =
             "isWindowsSandboxSetupPending:!1".
                 PadRight(OfficialWindowsSandboxSetupPendingGateText.Length);
         private const string OfficialWindowsSandboxRequirementText =
-            "windowsSandboxRequirement:mr";
+            "windowsSandboxRequirement:_r";
         private const string PortableWindowsSandboxRequirementText =
             "windowsSandboxRequirement:!1";
         private const string OfficialWindowsSandboxRequirementErrorText =
-            "hasWindowsSandboxRequirementError:fr";
+            "hasWindowsSandboxRequirementError:hr";
         private const string PortableWindowsSandboxRequirementErrorText =
             "hasWindowsSandboxRequirementError:!1";
         private const string OfficialWindowsSandboxRequirementPendingText =
-            "isWindowsSandboxRequirementPending:pr";
+            "isWindowsSandboxRequirementPending:gr";
         private const string PortableWindowsSandboxRequirementPendingText =
             "isWindowsSandboxRequirementPending:!1";
         private const string OfficialWindowsSandboxBannerRenderText =
-            "(0,u2.jsx)(xmc,{icon:u,title:d,detail:f,action:p})";
+            "(0,m4.jsx)(dLc,{icon:u,title:d,detail:f,action:p})";
         private static readonly string PortableWindowsSandboxBannerRenderText =
             "null".PadRight(OfficialWindowsSandboxBannerRenderText.Length);
         private const string OfficialWindowsSandboxFinalStepText =
-            "function es(e,t){return e.finalStep.shouldShow&&!t?q.WindowsSandboxSetup:q.Complete}";
+            "function $s(e,t){return e.finalStep.shouldShow&&!t?Z.WindowsSandboxSetup:Z.Complete}";
         private static readonly string PortableWindowsSandboxFinalStepText =
-            "function es(e,t){return q.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
+            "function $s(e,t){return Z.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
         private const int OnboardingBrandPaddingLength = 2;
         private const int ExpectedOnboardingLocaleEntries = 65;
         private const int ExpectedTranslatedOnboardingLocaleEntries = 64;
