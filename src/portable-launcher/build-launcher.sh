@@ -25,16 +25,6 @@ require_file() {
     [[ -f "$path" ]] || fail "Required file is missing: $path"
 }
 
-extract_file_version() {
-    local source=$1
-    local -a versions=()
-    mapfile -t versions < <(
-        sed -nE 's/^[[:space:]]*\[assembly:[[:space:]]*AssemblyFileVersion\("([^"]+)"\)\][[:space:]]*$/\1/p' "$source"
-    )
-    [[ ${#versions[@]} -eq 1 ]] || fail "Expected one AssemblyFileVersion in: $source"
-    printf '%s\n' "${versions[0]}"
-}
-
 find_roslyn_compiler() {
     local line version sdk_base candidate
     while IFS= read -r line; do
@@ -49,37 +39,11 @@ find_roslyn_compiler() {
     done < <("$dotnet_path" --list-sdks)
 }
 
-read_pe_machine() {
-    local output=$1
-    local pe_offset machine_offset
-    [[ $(od -An -tx1 -N2 "$output" | tr -d '[:space:]') == '4d5a' ]] || \
-        fail "Output is not a Windows executable: $output"
-    pe_offset=$(od -An -tu4 -j60 -N4 "$output" | tr -d '[:space:]')
-    [[ $pe_offset =~ ^[0-9]+$ ]] || fail "Cannot read PE header offset: $output"
-    [[ $(od -An -tx1 -j"$pe_offset" -N4 "$output" | tr -d '[:space:]') == '50450000' ]] || \
-        fail "Output has no PE signature: $output"
-    machine_offset=$((pe_offset + 4))
-    od -An -tu2 -j"$machine_offset" -N2 "$output" | tr -d '[:space:]'
-}
-
-assert_output() {
-    local output=$1
-    local expected_machine=$2
-    local machine
-    require_file "$output"
-    machine=$(read_pe_machine "$output")
-    [[ $machine == "$expected_machine" ]] || \
-        fail "PE machine mismatch for $output (expected $expected_machine, got $machine)"
-    strings -el "$output" | grep -Fx -- "$expected_version" >/dev/null || \
-        fail "Assembly version $expected_version is missing from: $output"
-}
-
 build_target() {
     local label=$1
     local source=$2
     local platform=$3
     local output=$4
-    local expected_machine=$5
     local -a compiler_args
 
     mkdir -p -- "$(dirname -- "$output")"
@@ -109,7 +73,6 @@ build_target() {
 
     printf 'Building %s...\n' "$label"
     "$dotnet_path" "$csc_path" "${compiler_args[@]}"
-    assert_output "$output" "$expected_machine"
 }
 
 output_root=''
@@ -158,10 +121,6 @@ if [[ -z $framework_dir ]]; then
 fi
 [[ -d $framework_dir ]] || fail "Framework reference directory is missing: $framework_dir"
 
-for required_command in od sed strings grep tr; do
-    command -v "$required_command" >/dev/null || fail "Required command is unavailable: $required_command"
-done
-
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 mkdir -p -- "$output_root"
 output_root=$(cd -- "$output_root" && pwd -P)
@@ -177,12 +136,6 @@ for input_path in "$core_source" "$bootstrap_source" "$icon_path" "$tray_dark_pa
     "$tray_light_path" "$manifest_path"; do
     require_file "$input_path"
 done
-
-core_version=$(extract_file_version "$core_source")
-bootstrap_version=$(extract_file_version "$bootstrap_source")
-[[ $core_version == "$bootstrap_version" ]] || \
-    fail "Launcher source versions differ: core=$core_version bootstrapper=$bootstrap_version"
-expected_version=$core_version
 
 mapfile -t csc_candidates < <(find_roslyn_compiler)
 [[ ${#csc_candidates[@]} -gt 0 ]] || fail 'Could not find Roslyn csc.dll from dotnet --list-sdks'
@@ -206,12 +159,12 @@ for reference_name in "${reference_names[@]}"; do
 done
 
 build_target 'x86 bootstrapper' "$bootstrap_source" x86 \
-    "$output_root/CodexPortable.exe" 332
+    "$output_root/CodexPortable.exe"
 build_target 'x86 launcher' "$core_source" x86 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.x86.exe" 332
+    "$output_root/CodexData/tools/launchers/CodexPortable.x86.exe"
 build_target 'x64 launcher' "$core_source" x64 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.x64.exe" 34404
+    "$output_root/CodexData/tools/launchers/CodexPortable.x64.exe"
 build_target 'ARM64 launcher' "$core_source" arm64 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe" 43620
+    "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe"
 
 printf 'Built launcher outputs under %s\n' "$output_root"

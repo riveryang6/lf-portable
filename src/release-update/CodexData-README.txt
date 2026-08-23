@@ -19,33 +19,20 @@ Windows ARM systems. It selects one of these launcher cores automatically:
 
 The official Codex Desktop payloads currently published by OpenAI are x64 and
 ARM64. The compact release stores them as the verified
-release\CodexData\packages\LFPortable-x64.msix and
-release\CodexData\packages\LFPortable-arm64.msix files. These packages are
-fixed-disk installation inputs only; they are not copied to the USB. First run
-the matching launcher core explicitly with
-`--prepare-host-execution-image --release-root <fixed-disk-release>
---architecture <x64|arm64>`; then run the release synchronizer only to copy
-launcher/data files to CODEX_USB. Synchronization does not prepare, inspect, or
-modify the host image. Launcher preflight then checks only the machine-local
-execution image; the USB launcher never reconstructs it from USB files.
-
-The image is stored under:
-%LOCALAPPDATA%\LFPortable\execution\<architecture>\desktop-lf-<launcher-version>.
-The desktop executable, bundled runtimes, and read-only marketplace source run
-from that fixed-disk image; they are not expanded into the USB root. The image
-namespace is machine/architecture/release based and is never keyed by the USB
-volume or portable-root token. A 32-bit x86 or ARM Windows host can run the
+CodexData\packages\LFPortable-x64.msix and
+CodexData\packages\LFPortable-arm64.msix files. On the first manual start from
+the CODEX_USB root, the launcher expands only the package matching the Windows
+architecture into a derived runtime location below that same portable root. A
+32-bit x86 or ARM Windows host can run the
 bootstrapper and diagnostics, but startup stops with a clear message because no
 official x86/ARM Desktop payload is published. The launcher never runs an
 incompatible PE file as a workaround.
 
 Quick start
 -----------
-1. Prepare the host image while the release directory is on a fixed local
-   drive, then synchronize the launcher/data files to the CODEX_USB volume.
-   Double-click CodexPortable.exe from the USB; do not run CodexDesktop.exe or
-   ChatGPT.exe directly. The launcher window is only the control surface; click
-   "Start Codex" yourself after the host image and API state are ready.
+1. Double-click CodexPortable.exe in the CODEX_USB root. Do not run
+   CodexDesktop.exe or ChatGPT.exe directly. The launcher window is only the control surface; click
+   "Start Codex" yourself after the payload and API state are ready.
 2. Choose "Set custom API" and enter the Responses API base URL, model and key.
    This portable build does not provide OpenAI/ChatGPT account sign-in.
 3. Click "Start Codex". The launcher hands off to the portable Codex process
@@ -82,8 +69,8 @@ regenerated to keep provider paths and offline plugins portable.
 approval_policy accepts untrusted,
 on-request or never; sandbox_mode accepts read-only, workspace-write or
 danger-full-access. The launcher uses an asInvoker manifest and does not
-request an administrator UAC prompt; it keeps the caller's normal Windows
-token. Running with
+request an administrator UAC prompt; it uses the current
+Windows token and reports its actual elevation state. Running with
 danger-full-access still permits Codex to modify files allowed by that Windows
 token. Because this mode deliberately does not use the Windows Agent sandbox,
 the portable UI does not run sandbox readiness/setup checks or block message
@@ -93,21 +80,18 @@ Portable data
 -------------
 The launcher keeps Codex user configuration, custom-provider sessions, SQLite
 state, the persistent Electron profile, logs, HOME and APPDATA in
-CodexData\data. The executable, bundled tools, primary runtime, and read-only
-marketplace source are kept in the machine-local execution image described
-above; only mutable plugin caches remain under the portable data root. Standard
+CodexData\data. The Codex primary runtime is also preloaded there. Standard
 first-run personalization/onboarding is disabled before the desktop starts,
 including model-upgrade and feature announcements on a completely new profile.
 The initial reasoning level is Max.
 
 To avoid high-frequency random writes to the USB drive, disposable Chromium,
-temporary, XDG, .NET bundle, npm, pip and uv caches use a per-session directory
-under the host Windows TEMP folder. The launcher deletes that directory after
-the portable process tree exits and removes abandoned session caches older than
-two days on a later start. If the fixed host scratch directory cannot be
-created, startup is blocked instead of falling back to high-churn USB caches.
-API credentials, configuration, task history and SQLite state remain on the USB
-data directory; they are never placed in the host scratch cache.
+temporary, XDG, .NET bundle, npm, pip and uv caches may use a per-session
+directory under the host Windows TEMP folder. The launcher removes abandoned
+session caches older than two days on a later start. If the host cache cannot be
+created or used, Codex falls back to the fully portable cache directories on the
+USB drive. The host cache is never required for startup. API credentials,
+configuration, task history and SQLite state are never placed in it.
 
 Custom-API mode also disables app-server remote control and analytics. Remote
 control requires ChatGPT account authentication and otherwise causes continuous
@@ -136,14 +120,12 @@ identity, architecture, and safe archive paths before installing it. Plugin
 auto-update and in-product program update transactions are disabled; replace
 the offline package and start it manually for a new release.
 
-An architecture release directory contains the bootstrapper, three launcher
-cores, two managed documentation files, the common runtime ZIP, and its
-matching MSIX. Host preparation imports the two packages into the fixed-disk
-package cache and execution image before USB synchronization. The USB copy
-retains only launcher/data files and mutable profile data, configuration,
-SQLite state, secrets, logs, downloads, and plugin caches; USB sync removes
-stale packages, legacy expanded payload/runtime, and retired descriptor paths
-without touching those data files or unknown user entries.
+An architecture package contains the bootstrapper, three launcher cores, two
+managed documentation files, the common runtime ZIP, and its matching MSIX.
+The derived desktop payload, runtime, offline marketplace, required plugin
+cache, and transaction staging are recreated from those packages on the next
+manual start. USB sync removes only those derived paths and retired descriptor
+files; other CodexData\data, logs, and unknown user entries are preserved.
 
 Important limits
 ----------------

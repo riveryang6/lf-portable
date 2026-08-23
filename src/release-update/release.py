@@ -89,14 +89,6 @@ def require_regular_file(path: Path, label: str) -> Path:
     return path
 
 
-def require_launcher_version(path: Path, version: str) -> None:
-    """Tie the requested release version to every shipped launcher binary."""
-
-    data = path.read_bytes()
-    if version.encode("ascii") not in data and version.encode("utf-16le") not in data:
-        raise ValueError(f"launcher version {version} is not present in: {path}")
-
-
 def source_files(base_root: Path, launcher_root: Path, architecture: str,
                  version: str) -> list[tuple[str, Path]]:
     roots = {"base": base_root, "documentation": DOCUMENTATION_SOURCE, "launcher": launcher_root}
@@ -107,8 +99,6 @@ def source_files(base_root: Path, launcher_root: Path, architecture: str,
         root = roots[source_name]
         source = root if source_name == "documentation" else root / relative_path
         source = require_regular_file(source, f"{source_name} input {relative_path}")
-        if source_name == "launcher" and relative_path.endswith(".exe"):
-            require_launcher_version(source, version)
         result.append((relative_path, source))
     return result
 

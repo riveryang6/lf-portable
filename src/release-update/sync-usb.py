@@ -29,13 +29,12 @@ RELEASE_COMMON_FILES = (
     "CodexData/tools/launchers/CodexPortable.x86.exe",
     "CodexData/tools/launchers/CodexPortable.x64.exe",
     "CodexData/tools/launchers/CodexPortable.arm64.exe",
+    "CodexData/packages/LFPortable-common.zip",
 )
 
-# These are obsolete USB-side derived trees from older releases. The current
-# launcher uses an executable/runtime image prepared separately on the fixed
-# disk, so synchronization only removes these stale trees. It never reads or
-# writes the host image, copies release packages to USB, or removes user
-# configuration, SQLite state, secrets, sessions, logs, or unknown files.
+# These are generated from the package files on the next Windows start.  Keep
+# the list explicit so USB synchronization cannot remove user configuration,
+# SQLite state, secrets, sessions, logs, or unknown files.
 DERIVED_RELEASE_PATHS = (
     "CodexData/app",
     # Transaction staging is disposable; the launcher recreates this empty
@@ -46,6 +45,19 @@ DERIVED_RELEASE_PATHS = (
     "CodexData/tools/gh",
     "CodexData/data/profile/.cache/codex-runtimes/codex-primary-runtime",
     "CodexData/data/profile/.codex/offline-marketplaces/openai-primary-runtime",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/sites",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/browser",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/chrome",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/computer-use",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/codex-app-tools",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/latex",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/deep-research",
+    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/visualize",
+    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/documents",
+    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/pdf",
+    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/presentations",
+    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/spreadsheets",
+    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/template-creator",
     "CodexData/portable-release.json",
     "CodexData/portable-package-manifest.json",
     "portable-package-manifest.json",
@@ -296,6 +308,19 @@ def windows_comparison_key(path: str) -> str:
     return path.replace("/", "\\").rstrip("\\").casefold()
 
 
+def native_delete_path(path: Path) -> str | Path:
+    """Use an extended-length spelling for a validated Windows delete target."""
+
+    if os.name != "nt":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+
 def running_processes(
     target_windows_path: str,
     helper_windows_path: str,
@@ -328,14 +353,15 @@ def running_processes(
             raise SyncError("cannot inspect running portable processes: invalid helper output")
         process_id, name, executable_path = values
         full_path = windows_comparison_key(executable_path)
-        # CodexDesktop.exe is copied into a fixed-disk execution image before
-        # handoff. Its path is therefore intentionally outside the USB root;
-        # the unique LF process name still identifies the portable desktop.
-        # The official WindowsApps package uses ChatGPT.exe, so this does not
-        # block the independently installed desktop.
+        # A normal portable desktop must run below the selected USB root. If
+        # Windows withholds the executable path, fail closed on LF's unique
+        # process name; the official WindowsApps package uses ChatGPT.exe.
         normalized_name = name.strip().casefold()
         portable_desktop = normalized_name in {"codexdesktop", "codexdesktop.exe"}
-        if full_path == root or full_path.startswith(prefix) or portable_desktop:
+        path_unavailable = not executable_path.strip()
+        if full_path == root or full_path.startswith(prefix) or (
+            path_unavailable and portable_desktop
+        ):
             matches.append(
                 {
                     "ProcessId": process_id,
@@ -418,8 +444,22 @@ def run_robocopy(
 
 def release_sources(source: Path) -> list[tuple[str, Path]]:
     reject_reparse_path(source, "source root")
+    package_directory = source / "CodexData" / "packages"
+    reject_reparse_path(package_directory, "source package directory")
+    desktop_packages = sorted(package_directory.glob("LFPortable-*.msix"))
+    if len(desktop_packages) != 1:
+        raise SyncError(
+            "the release must contain exactly one architecture-specific desktop package "
+            "under CodexData/packages"
+        )
+    desktop_package = desktop_packages[0]
+    if desktop_package.name not in {"LFPortable-x64.msix", "LFPortable-arm64.msix"}:
+        raise SyncError(f"unsupported desktop package name: {desktop_package.name}")
     files = []
-    for relative_path in RELEASE_COMMON_FILES:
+    relative_files = RELEASE_COMMON_FILES + (
+        str(desktop_package.relative_to(source)).replace("\\", "/"),
+    )
+    for relative_path in relative_files:
         candidate = source / relative_path
         require_regular_file(candidate, f"release input {relative_path}")
         files.append((relative_path, candidate))
@@ -445,21 +485,14 @@ def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Pat
     candidates: list[Path] = []
     if package_directory.is_dir():
         candidates.extend(package_directory.glob("LFPortable-*.msix"))
-        common_package = package_directory / "LFPortable-common.zip"
-        if common_package.exists() or os.path.lexists(common_package):
-            candidates.append(common_package)
     removed = []
     for candidate in candidates:
         relative_path = str(candidate.relative_to(target)).replace("\\", "/")
         if relative_path in copied_names:
             continue
         require_regular_file(candidate, f"obsolete USB package {relative_path}")
-        if candidate.name in {
-            "LFPortable-x64.msix",
-            "LFPortable-arm64.msix",
-            "LFPortable-common.zip",
-        }:
-            candidate.unlink()
+        if candidate.name in {"LFPortable-x64.msix", "LFPortable-arm64.msix"}:
+            os.unlink(native_delete_path(candidate))
             removed.append(relative_path)
     for relative_path in DERIVED_RELEASE_PATHS:
         candidate = target / relative_path
@@ -467,9 +500,9 @@ def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Pat
             continue
         reject_reparse_path(candidate, f"obsolete USB path {relative_path}")
         if candidate.is_dir():
-            shutil.rmtree(candidate)
+            shutil.rmtree(native_delete_path(candidate))
         elif candidate.is_file():
-            candidate.unlink()
+            os.unlink(native_delete_path(candidate))
         else:
             raise SyncError(f"refusing to remove an unsupported target: {relative_path}")
         removed.append(relative_path)
@@ -506,6 +539,7 @@ def execute(args: argparse.Namespace) -> None:
     assert target_windows_path is not None
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
     validate_target_paths(target, files)
+
     if source_windows_path is not None and shutil.which("robocopy.exe") is not None:
         exit_codes = []
         for relative_path, _ in files:
@@ -555,7 +589,7 @@ def main() -> int:
                 "action": "plan",
                 "copy": "architecture-specific release files via robocopy when Windows paths are available; shutil.copy2 otherwise",
                 "execute": False,
-                "file_count": len(RELEASE_COMMON_FILES),
+                "file_count": len(RELEASE_COMMON_FILES) + 1,
                 "source_root": args.source_root,
                 "target_data": "existing target entries are preserved",
                 "usb_root": args.usb_root,
