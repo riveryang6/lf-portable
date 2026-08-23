@@ -2,8 +2,14 @@
 
 LF Portable is a Windows launcher and compact release layout for Codex
 Desktop. The launcher, configuration, SQLite state, keys, profile, and other
-mutable data stay in the portable root. The desktop executable and runtime use
-a local fixed-disk execution image after first start.
+mutable data stay in the portable root. The desktop executable, runtimes, and
+read-only marketplace are built into a machine-local fixed-disk execution image
+from the release packages; the USB root is never used as the executable tree.
+Normal launcher preflight checks only that fixed-disk image. Release packages
+are input to the explicit host-preparation command, not a runtime path. The
+launcher and desktop always use the caller's Windows token: the embedded
+manifest is `asInvoker` with `uiAccess=false`, and normal startup never uses
+`requireAdministrator`, `runas`, or another implicit elevation path.
 
 ## Repository Layout
 
@@ -40,7 +46,7 @@ src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.0
+  --version 1.4.24.1
 ```
 
 The command creates two runnable directories and matching offline archives:
@@ -77,12 +83,15 @@ actually opened and that the first-run model announcement and `Try model` CTA
 did not appear. Use the `LFPortable-arm64` directory instead on an ARM64 host.
 
 Deploy the same release to the real USB drive from WSL. The helper uses WSL
-interop for the Windows volume and process APIs, and `robocopy` copies the
-managed release files. It removes only the old expanded desktop/runtime,
-offline-marketplace, required-plugin-cache, transaction staging, and retired
-descriptor paths so the next start rebuilds them from the new offline package;
-configuration, SQLite, secrets, sessions, logs, and unknown user files are
-preserved.
+interop for the Windows volume and process APIs, and `robocopy` copies only the
+managed launcher and documentation files. It does not prepare, inspect, or
+modify the host execution image; run the explicit host-preparation command
+separately on each Windows machine that will run the USB. Release packages are
+never copied to the USB. The synchronizer removes only obsolete USB-side
+expanded desktop/runtime, offline-marketplace, transaction staging, package,
+and retired descriptor paths. Mutable plugin caches are preserved with the
+portable data; configuration, SQLite, secrets, sessions, logs, and unknown
+files remain untouched.
 
 ```bash
 src/release-update/sync-usb.sh \
@@ -91,9 +100,12 @@ src/release-update/sync-usb.sh \
   --execute
 ```
 
-`--usb-root` must be the root of the drive labelled `CODEX_USB`. Then start
-`CodexPortable.exe` from that drive in Windows and confirm that the desktop
-opens. With an independently installed WindowsApps Codex Desktop already
+`--source-root` is only the release tree whose launcher/documentation files are
+copied; it has no runtime relationship with the USB. Prepare the host image
+explicitly with the matching fixed-disk release tree before starting the USB.
+`--usb-root` must be the root of the drive labelled `CODEX_USB`. After
+synchronization, start `CodexPortable.exe` from the USB in Windows and confirm
+that the desktop opens. With an independently installed WindowsApps Codex Desktop already
 running, also confirm that the portable instance starts alongside it and that
 reopening the same portable root does not start a second portable instance.
 Use the release directory matching the USB target host architecture.
@@ -110,12 +122,12 @@ release has two program assets: `LFPortable-x64.zip` and `LFPortable-arm64.zip`.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.0"
-git tag -a v1.4.24.0 -m "LF Portable 1.4.24.0"
-git push origin main v1.4.24.0
+git commit -m "Release LF Portable 1.4.24.1"
+git tag -a v1.4.24.1 -m "LF Portable 1.4.24.1"
+git push origin main v1.4.24.1
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.0
+  --version 1.4.24.1
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

@@ -3,14 +3,12 @@
   <assemblyIdentity
     type="win32"
     name="CodexPortable.Launcher"
-    version="1.4.24.0"
+    version="1.4.24.1"
     processorArchitecture="*" />
 
-  <!--
-    Portable operations only touch the selected portable root and do not require
-    administrator rights. Keep the whole launcher at the caller's current token
-    level; any future privileged operation must make a separate, explicit decision.
-  -->
+  <!-- Portable operations are scoped to the selected portable root. Keep the
+       launcher at the caller's token level so the desktop retains its normal
+       userdata and integrity context. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

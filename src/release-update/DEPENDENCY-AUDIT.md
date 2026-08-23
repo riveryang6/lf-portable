@@ -1,11 +1,13 @@
 # Portable Dependency Audit
 
-This audit covers the common runtime archive used by LF Portable 1.4.24.0:
+This audit covers the common runtime archive used by LF Portable 1.4.24.1:
 `release/CodexData/packages/LFPortable-common.zip`. The archive is deliberately
-self-contained. The launcher selects the copies below from the portable tree
-and does not depend on a host installation, registry entry, or host `PATH` for
-the supported runtime. This keeps USB and clean Windows Sandbox behavior
-reproducible.
+self-contained. Host preparation copies the required entries into a
+machine-local fixed-disk execution image and package cache before USB
+deployment; subsequent starts use that image and never read package files from
+the USB. The supported runtime does not depend on a host installation,
+registry entry, or host `PATH`, which keeps USB and clean Windows Sandbox
+behavior reproducible.
 
 The inventory and sizes below were measured on 2026-08-19. Sizes are ZIP
 compressed bytes reported by `zipinfo -l`; they are not a checksum, release
@@ -15,14 +17,14 @@ descriptor, or startup validation record.
 
 | Bundle | Version observed | Compressed size | Evidence and decision |
 | --- | --- | ---: | --- |
-| Portable .NET SDK and shared runtimes | SDK 8.0.423; runtimes 8.0.29 | 237.49 MiB | `tools/dotnet/dotnet.exe` is a launcher prerequisite and `DOTNET_ROOT` is pinned to this tree. Keep the SDK for the current Codex tool surface; a runtime-only package needs separate USB and Sandbox testing. |
-| Portable Python | 3.12.13 | 149.57 MiB | The launcher requires `.../dependencies/python/python.exe`. Documents, PDF, presentations, and spreadsheet skills invoke it and use bundled packages such as `pandas`, `numpy`, `pypdf`, `python-docx`, and `reportlab`. Keep it portable. |
-| Portable Node.js and modules | 24.14.0 | 121.95 MiB | The launcher requires `.../dependencies/node/bin/node.exe`. Presentation, template-creator, spreadsheet/artifact tooling, and browser/CUA helpers use the portable Node path and modules. Keep it portable. |
-| Git for Windows runtime | 2.53.0.3 | 44.53 MiB | The launcher requires `.../dependencies/native/git/cmd/git.exe` and exports `CODEX_PREFERRED_GIT_EXECUTABLE`. Keep the bundled DLLs and companion runtime. |
+| Portable .NET SDK and shared runtimes | SDK 8.0.423; runtimes 8.0.29 | 237.49 MiB | The launcher copies `tools/dotnet/dotnet.exe` into the machine-local execution image and pins `DOTNET_ROOT` there. Keep the SDK for the current Codex tool surface; a runtime-only package needs separate USB and Sandbox testing. |
+| Portable Python | 3.12.13 | 149.57 MiB | The fixed-disk image supplies `.../dependencies/python/python.exe`. Documents, PDF, presentations, and spreadsheet skills invoke it and use bundled packages such as `pandas`, `numpy`, `pypdf`, `python-docx`, and `reportlab`. Keep it in the release package. |
+| Portable Node.js and modules | 24.14.0 | 121.95 MiB | The fixed-disk image supplies `.../dependencies/node/bin/node.exe`. Presentation, template-creator, spreadsheet/artifact tooling, and browser/CUA helpers use that local image path. Keep it in the release package. |
+| Git for Windows runtime | 2.53.0.3 | 44.53 MiB | The fixed-disk image supplies `.../dependencies/native/git/cmd/git.exe` and exports `CODEX_PREFERRED_GIT_EXECUTABLE`. Keep the bundled DLLs and companion runtime. |
 | Poppler helpers | bundled `pdfinfo`/`pdftoppm` | 37.48 MiB | The PDF skill explicitly uses `pdftoppm` and `pdfinfo`; the runtime supplies portable command wrappers. Do not fall back to an unpinned system Poppler on a clean host. |
 | `libheif` and `jxrlib` image helpers | bundled native tools | 3.35 MiB + 2.23 MiB | The runtime's override commands expose these helpers for image conversion. They are small and remain part of the offline feature set. |
 | GitHub CLI | 2.97.0 | 13.52 MiB | The desktop can start without it and bundled plugin scripts do not invoke `gh`, but the launcher currently requires `tools/gh/gh.exe` (or `tools/gh/bin/gh.exe`) and exposes it as a supported tool. Make it an explicitly optional pack only after changing that contract and testing both acceptance paths. |
-| Primary-runtime plugin source and cache trees | current marketplace files | 3.92 MiB each | `data/profile/.codex/offline-marketplaces/openai-primary-runtime` is the offline source; the matching runtime plugin tree is also shipped. These are the five required primary plugins (`documents`, `pdf`, `presentations`, `spreadsheets`, `template-creator`), not a per-user derived cache. |
+| Primary-runtime plugin source and cache trees | current marketplace files | 3.92 MiB each | The primary marketplace source is copied into the machine-local execution image; the five derived plugin caches (`documents`, `pdf`, `presentations`, `spreadsheets`, `template-creator`) remain mutable data in the portable root. |
 
 The archive has 26,489 entries, is 656,611,053 bytes (626.19 MiB) on disk,
 and expands to about 1.71 GiB. The largest reducible groups are the SDK/packs,
@@ -32,10 +34,10 @@ portable contract.
 
 ## What Can Change
 
-* **Do not remove portable runtimes for this release.** `CommonPayloadComplete`
-  and the execution-image checks require .NET, Node, Python, Git, `gh`, and the
-  offline marketplace. The supported package must continue to run on a clean
-  machine with no preinstalled developer tools.
+* **Do not remove portable runtimes for this release.** The execution-image
+  checks require .NET, Node, Python, Git, `gh`, and the offline marketplace.
+  The supported package must continue to run on a clean machine with no
+  preinstalled developer tools.
 * **Do not trim or repackage the signed MSIX.** Its Authenticode signature,
   `AppxManifest.xml`, publisher identity, architecture, and payload are checked
   together when the desktop package is prepared.
@@ -54,7 +56,7 @@ The old combined archive contained both desktop MSIX files and approached the
 2 GiB class limit. The release builder now emits architecture-specific offline
 packages: `LFPortable-x64.zip` and `LFPortable-arm64.zip`. Each package carries
 the common ZIP and only its matching official MSIX, while retaining all
-portable feature libraries for clean-machine and Sandbox use.
+portable feature libraries for host preparation and clean-machine/Sandbox use.
 
 The current bundled MSIX manifests are `OpenAI.Codex` version `26.814.5167.0`
 for both x64 and ARM64 (the same version is advertised by the official

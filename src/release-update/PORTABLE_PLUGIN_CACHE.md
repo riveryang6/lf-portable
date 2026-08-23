@@ -13,9 +13,12 @@ Do not copy plugin contents directly into a catalog directory or create a
 `latest` alias. A cache with that shape is not usable by Codex Desktop.
 
 The compact common runtime ZIP intentionally contains no derived plugin cache.
-On the first portable start, the launcher reconstructs the cache from the
-local offline marketplace and the matching signed desktop package. For the
-current desktop layout, x64 uses thirteen plugins:
+Host preparation copies the read-only marketplace source and bundled
+marketplace from the verified release packages into the machine-local
+execution image, then the first explicit portable start reconstructs the
+mutable cache in the portable data root. Later starts use those fixed-disk
+sources and do not need package files from the USB. For the current desktop
+layout, x64 uses thirteen plugins:
 
 - `openai-bundled`: `sites`, `browser`, `chrome`, `computer-use`,
   `codex-app-tools`, `latex`, `deep-research`, and `visualize`.
@@ -31,7 +34,7 @@ The launcher leaves user configuration, secrets, sessions, logs, and unknown
 cache entries in place. There is no separate repair script in the WSL-first
 build and release workflow.
 
-Release assembly is performed from WSL with `release.sh`; USB deployment and
-the actual Windows desktop check remain Windows-only operations because they
-need the Windows volume, process, and GUI APIs. The cache is never copied from
-one USB installation to another as a release input.
+Release assembly is performed from WSL with `release.sh`; host preparation and
+USB deployment use the Windows fixed-disk/process APIs, and the actual desktop
+check remains a Windows GUI operation. The cache is never copied from one USB
+installation to another as a release input.

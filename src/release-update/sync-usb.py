@@ -29,12 +29,13 @@ RELEASE_COMMON_FILES = (
     "CodexData/tools/launchers/CodexPortable.x86.exe",
     "CodexData/tools/launchers/CodexPortable.x64.exe",
     "CodexData/tools/launchers/CodexPortable.arm64.exe",
-    "CodexData/packages/LFPortable-common.zip",
 )
 
-# These are generated from the package files on the next Windows start.  Keep
-# the list explicit so USB synchronization cannot remove user configuration,
-# SQLite state, secrets, sessions, logs, or unknown files.
+# These are obsolete USB-side derived trees from older releases. The current
+# launcher uses an executable/runtime image prepared separately on the fixed
+# disk, so synchronization only removes these stale trees. It never reads or
+# writes the host image, copies release packages to USB, or removes user
+# configuration, SQLite state, secrets, sessions, logs, or unknown files.
 DERIVED_RELEASE_PATHS = (
     "CodexData/app",
     # Transaction staging is disposable; the launcher recreates this empty
@@ -45,19 +46,6 @@ DERIVED_RELEASE_PATHS = (
     "CodexData/tools/gh",
     "CodexData/data/profile/.cache/codex-runtimes/codex-primary-runtime",
     "CodexData/data/profile/.codex/offline-marketplaces/openai-primary-runtime",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/sites",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/browser",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/chrome",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/computer-use",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/codex-app-tools",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/latex",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/deep-research",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/visualize",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/documents",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/pdf",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/presentations",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/spreadsheets",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/template-creator",
     "CodexData/portable-release.json",
     "CodexData/portable-package-manifest.json",
     "portable-package-manifest.json",
@@ -430,22 +418,8 @@ def run_robocopy(
 
 def release_sources(source: Path) -> list[tuple[str, Path]]:
     reject_reparse_path(source, "source root")
-    package_directory = source / "CodexData" / "packages"
-    reject_reparse_path(package_directory, "source package directory")
-    desktop_packages = sorted(package_directory.glob("LFPortable-*.msix"))
-    if len(desktop_packages) != 1:
-        raise SyncError(
-            "the release must contain exactly one architecture-specific desktop package "
-            "under CodexData/packages"
-        )
-    desktop_package = desktop_packages[0]
-    if desktop_package.name not in {"LFPortable-x64.msix", "LFPortable-arm64.msix"}:
-        raise SyncError(f"unsupported desktop package name: {desktop_package.name}")
     files = []
-    relative_files = RELEASE_COMMON_FILES + (
-        str(desktop_package.relative_to(source)).replace("\\", "/"),
-    )
-    for relative_path in relative_files:
+    for relative_path in RELEASE_COMMON_FILES:
         candidate = source / relative_path
         require_regular_file(candidate, f"release input {relative_path}")
         files.append((relative_path, candidate))
@@ -471,13 +445,20 @@ def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Pat
     candidates: list[Path] = []
     if package_directory.is_dir():
         candidates.extend(package_directory.glob("LFPortable-*.msix"))
+        common_package = package_directory / "LFPortable-common.zip"
+        if common_package.exists() or os.path.lexists(common_package):
+            candidates.append(common_package)
     removed = []
     for candidate in candidates:
         relative_path = str(candidate.relative_to(target)).replace("\\", "/")
         if relative_path in copied_names:
             continue
         require_regular_file(candidate, f"obsolete USB package {relative_path}")
-        if candidate.name in {"LFPortable-x64.msix", "LFPortable-arm64.msix"}:
+        if candidate.name in {
+            "LFPortable-x64.msix",
+            "LFPortable-arm64.msix",
+            "LFPortable-common.zip",
+        }:
             candidate.unlink()
             removed.append(relative_path)
     for relative_path in DERIVED_RELEASE_PATHS:
@@ -525,7 +506,6 @@ def execute(args: argparse.Namespace) -> None:
     assert target_windows_path is not None
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
     validate_target_paths(target, files)
-
     if source_windows_path is not None and shutil.which("robocopy.exe") is not None:
         exit_codes = []
         for relative_path, _ in files:
@@ -575,7 +555,7 @@ def main() -> int:
                 "action": "plan",
                 "copy": "architecture-specific release files via robocopy when Windows paths are available; shutil.copy2 otherwise",
                 "execute": False,
-                "file_count": len(RELEASE_COMMON_FILES) + 1,
+                "file_count": len(RELEASE_COMMON_FILES),
                 "source_root": args.source_root,
                 "target_data": "existing target entries are preserved",
                 "usb_root": args.usb_root,

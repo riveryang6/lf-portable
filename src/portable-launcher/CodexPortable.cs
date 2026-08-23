@@ -26,8 +26,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.0")]
-[assembly: AssemblyFileVersion("1.4.24.0")]
+[assembly: AssemblyVersion("1.4.24.1")]
+[assembly: AssemblyFileVersion("1.4.24.1")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -47,6 +47,12 @@ namespace CodexPortable
             // has exited and must not touch a disconnected removable volume.
             if (args.Length > 0 && DesktopImageFailureWatch.IsWatchArgument(args[0]))
                 return DesktopImageFailureWatch.Run(args);
+            // Host preparation is an explicit fixed-disk installation action,
+            // not a normal portable-root launch. It must run before any USB
+            // root discovery so the setup path is independent of USB data.
+            int hostPreparationIndex = HostExecutionImage.FindHostPreparationArgument(args);
+            if (hostPreparationIndex >= 0)
+                return HostExecutionImage.RunHostPreparation(args, hostPreparationIndex);
             string rootOverride = null;
             string rootTokenOverride = null;
             int bootstrapperProcessId = 0;
@@ -263,17 +269,6 @@ namespace CodexPortable
 
         internal static bool IsDesktopRunning(PortableLayout layout)
         {
-            string portableDesktop;
-            try
-            {
-                // Electron child processes use the same executable as the
-                // desktop shell. Restrict detection to the portable executable
-                // and LF-owned execution image so an installed official Codex
-                // desktop never blocks this portable root.
-                portableDesktop = NormalizeExecutablePath(layout.AppExe);
-            }
-            catch { return true; }
-
             bool jobExists;
             bool jobActive;
             if (!JobRun.TryGetRootJobStateForToken(layout.RootToken, out jobExists, out jobActive)) return true;
@@ -306,8 +301,11 @@ namespace CodexPortable
                             JobRun.IsProcessInRootJobForToken(process, layout.RootToken)) return true;
                         continue;
                     }
-                    if (IsSameExecutablePath(executable, portableDesktop) ||
-                        HostExecutionImage.IsExecutionPathForLayout(layout, executable)) return true;
+                    // The fixed-disk image is shared by portable roots.  Its
+                    // executable path alone therefore cannot identify this
+                    // USB instance; the per-root Job is the ownership boundary.
+                    if (HostExecutionImage.IsExecutionPathForLayout(layout, executable) &&
+                        JobRun.IsProcessInRootJobForToken(process, layout.RootToken)) return true;
                 }
                 catch { }
                 finally { process.Dispose(); }
@@ -330,15 +328,6 @@ namespace CodexPortable
                 return !string.IsNullOrEmpty(processName);
             }
             catch { return false; }
-        }
-
-        private static bool IsSameExecutablePath(string candidate, string expected)
-        {
-            string full;
-            try { full = Path.GetFullPath(candidate); }
-            catch { return false; }
-            return string.Equals(full.TrimEnd(Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar), expected, StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool IsAnyExecutableRunningUnderRoot(string executionRoot)
@@ -565,11 +554,20 @@ namespace CodexPortable
 
         internal static bool RequiredPluginCacheComplete(PortableLayout layout, string[] requiredPlugins)
         {
+            PortableExecutionLayout execution = HostExecutionImage.GetExpectedLayout(layout);
+            return RequiredPluginCacheComplete(layout, requiredPlugins, execution.Resources,
+                execution.PrimaryMarketplace);
+        }
+
+        internal static bool RequiredPluginCacheComplete(PortableLayout layout,
+            string[] requiredPlugins, string bundledResources, string primaryMarketplace)
+        {
             try
             {
                 for (int i = 0; i < requiredPlugins.Length; i++)
                 {
-                    PluginDefinition definition = ReadDefinition(layout, requiredPlugins[i]);
+                    PluginDefinition definition = ReadDefinition(layout, requiredPlugins[i],
+                        bundledResources, primaryMarketplace);
                     if (!IsCachedVersionComplete(definition)) return false;
                 }
                 return true;
@@ -578,6 +576,14 @@ namespace CodexPortable
         }
 
         internal static int EnsureRequiredPlugins(PortableLayout layout, string[] requiredPlugins)
+        {
+            PortableExecutionLayout execution = HostExecutionImage.GetExpectedLayout(layout);
+            return EnsureRequiredPlugins(layout, requiredPlugins, execution.Resources,
+                execution.PrimaryMarketplace);
+        }
+
+        internal static int EnsureRequiredPlugins(PortableLayout layout, string[] requiredPlugins,
+            string bundledResources, string primaryMarketplace)
         {
             Mutex mutation = PortableProcess.AcquireMutationMutex(layout, 0);
             if (mutation == null)
@@ -589,7 +595,8 @@ namespace CodexPortable
                 int repaired = 0;
                 for (int i = 0; i < requiredPlugins.Length; i++)
                 {
-                    PluginDefinition definition = ReadDefinition(layout, requiredPlugins[i]);
+                    PluginDefinition definition = ReadDefinition(layout, requiredPlugins[i],
+                        bundledResources, primaryMarketplace);
                     if (IsCachedVersionComplete(definition)) continue;
                     try
                     {
@@ -610,7 +617,8 @@ namespace CodexPortable
             finally { PortableProcess.ReleaseMutationMutex(mutation); }
         }
 
-        private static PluginDefinition ReadDefinition(PortableLayout layout, string pluginKey)
+        private static PluginDefinition ReadDefinition(PortableLayout layout, string pluginKey,
+            string bundledResources, string primaryMarketplace)
         {
             int separator = pluginKey.IndexOf('@');
             if (separator <= 0 || separator == pluginKey.Length - 1 || pluginKey.IndexOf('@', separator + 1) >= 0)
@@ -621,11 +629,12 @@ namespace CodexPortable
             string sourceRoot;
             if (string.Equals(marketplaceName, "openai-bundled", StringComparison.Ordinal))
             {
-                sourceRoot = Path.Combine(layout.Resources, "plugins", marketplaceName, "plugins", pluginName);
+                sourceRoot = Path.Combine(bundledResources, "plugins", marketplaceName,
+                    "plugins", pluginName);
             }
             else if (string.Equals(marketplaceName, "openai-primary-runtime", StringComparison.Ordinal))
             {
-                sourceRoot = Path.Combine(layout.CodexHome, "offline-marketplaces", marketplaceName, "plugins", pluginName);
+                sourceRoot = Path.Combine(primaryMarketplace, "plugins", pluginName);
             }
             else throw new InvalidDataException("Required plugin uses an untrusted marketplace: " + pluginKey);
 
@@ -1234,12 +1243,6 @@ namespace CodexPortable
         internal string DataRoot;
         internal PortableArchitecture Architecture;
         internal string ArchitectureName;
-        internal string AppVariantRoot;
-        internal string CurrentApp;
-        internal string OfficialAppExe;
-        internal string AppExe;
-        internal string Resources;
-        internal string CodexExe;
         internal string Profile;
         internal string CodexHome;
         internal string SqliteHome;
@@ -1299,20 +1302,11 @@ namespace CodexPortable
                 PortableProcess.GetRootToken(root) : rootTokenOverride;
             p.DataRoot = Path.Combine(root, "CodexData");
             p.Tools = Path.Combine(p.DataRoot, "tools");
-            p.Packages = Path.Combine(p.DataRoot, "packages");
             p.Architecture = ArchitectureInfo.Current;
             p.ArchitectureName = ArchitectureInfo.NameOf(p.Architecture);
-            p.AppVariantRoot = p.Architecture == PortableArchitecture.X64 ?
-                Path.Combine(p.DataRoot, "app") :
-                Path.Combine(p.Tools, "desktop-payloads", p.ArchitectureName);
-            p.CurrentApp = Path.Combine(p.AppVariantRoot, "current");
-            // Keep the official MSIX payload name for signature/update compatibility,
-            // but run a byte-identical Codex-named copy so the portable process is
-            // distinguishable from an installed ChatGPT/Codex package.
-            p.OfficialAppExe = Path.Combine(p.CurrentApp, "ChatGPT.exe");
-            p.AppExe = Path.Combine(p.CurrentApp, PortableBranding.DesktopExecutableName);
-            p.Resources = Path.Combine(p.CurrentApp, "resources");
-            p.CodexExe = Path.Combine(p.Resources, "codex.exe");
+            // Release-installation inputs live on the fixed disk. The USB root
+            // contains only launcher/data state and is never a package source.
+            p.Packages = HostExecutionImage.GetPackageCacheRoot(p.Architecture);
             p.Profile = Path.Combine(p.DataRoot, "data", "profile");
             p.CodexHome = Path.Combine(p.Profile, ".codex");
             p.SqliteHome = Path.Combine(p.CodexHome, "sqlite");
@@ -1365,16 +1359,14 @@ namespace CodexPortable
         internal void EnsureDirectories()
         {
             string[] dirs = new string[] {
-                DataRoot, Path.Combine(DataRoot, "app"), Profile, CodexHome, SqliteHome,
+                DataRoot, Profile, CodexHome, SqliteHome,
                 ElectronData, Home, AppData, LocalAppData, LocalAppDataLow, Temp,
                 XdgConfig, XdgCache, XdgData, XdgState, Secrets, Logs, Updates,
                 Path.Combine(Profile, "cache"), Path.Combine(Profile, "dotnet"),
                 Path.Combine(Profile, "nuget"), Path.Combine(Profile, "gh"),
                 Path.Combine(Profile, "npm"), Path.Combine(Profile, "pip"),
                 Path.Combine(Profile, "cargo"), Path.Combine(Profile, "rustup")
-                , Path.Combine(DataRoot, "data", "config"), Downloads, ChromiumCache, CrashDumps, Tools,
-                Packages,
-                AppVariantRoot
+                , Path.Combine(DataRoot, "data", "config"), Downloads, ChromiumCache, CrashDumps, Tools
             };
             for (int i = 0; i < dirs.Length; i++)
                 IOUtil.EnsureDirectoryWithinNoReparse(dirs[i], Root);
@@ -1382,7 +1374,16 @@ namespace CodexPortable
 
         internal void EnsureConfig()
         {
-            ProviderConfiguration.WriteDeterministicConfig(this);
+            // Configuration may be created before the first image build. Keep
+            // all executable and marketplace references on the fixed disk even
+            // during that preflight window; the USB root is data-only.
+            ProviderConfiguration.WriteDeterministicConfig(this,
+                HostExecutionImage.GetExpectedLayout(this));
+        }
+
+        internal void EnsureConfig(PortableExecutionLayout execution)
+        {
+            ProviderConfiguration.WriteDeterministicConfig(this, execution);
         }
 
         internal void EnsureOnboardingSuppressed()
@@ -1440,117 +1441,16 @@ namespace CodexPortable
     {
         private const long MaximumExpandedBytes = 4L * 1024L * 1024L * 1024L;
         private const int MaximumEntries = 100000;
-        private const int ExtractionTimeoutMinutes = 45;
-        private const int ProgressReportIntervalMilliseconds = 125;
         private static readonly string[] CommonRoots = new string[] {
             "tools/dotnet",
             "tools/gh",
             "data/profile/.cache/codex-runtimes",
             "data/profile/.codex/offline-marketplaces"
         };
-
-        private sealed class ActivatedRoot
-        {
-            internal string Destination;
-            internal string Backup;
-            internal bool ExistingMoved;
-            internal bool NewMoved;
-        }
-
-        internal static bool HasInstallPackages(PortableLayout layout)
-        {
-            return File.Exists(layout.CommonPackage) && File.Exists(layout.BundledDesktopPackage);
-        }
-
-        internal static bool CommonPayloadComplete(PortableLayout layout)
-        {
-            return File.Exists(Path.Combine(layout.Tools, "dotnet", "dotnet.exe")) &&
-                (File.Exists(Path.Combine(layout.Tools, "gh", "bin", "gh.exe")) ||
-                    File.Exists(Path.Combine(layout.Tools, "gh", "gh.exe"))) &&
-                File.Exists(Path.Combine(layout.Runtime, "dependencies", "node", "bin", "node.exe")) &&
-                File.Exists(Path.Combine(layout.Runtime, "dependencies", "python", "python.exe")) &&
-                File.Exists(Path.Combine(layout.Runtime, "dependencies", "native", "git", "cmd", "git.exe")) &&
-                File.Exists(Path.Combine(layout.CodexHome, "offline-marketplaces", "openai-primary-runtime",
-                    ".agents", "plugins", "marketplace.json"));
-        }
-
-        internal static void EnsureReady(PortableLayout layout)
-        {
-            EnsureReady(layout, null);
-        }
-
-        internal static void EnsureReady(PortableLayout layout,
-            Action<FirstLaunchProgress> progress)
-        {
-            EnsureCommonPayload(layout, progress);
-            if (!File.Exists(layout.OfficialAppExe))
-                EnsureDesktopPayload(layout, progress);
-        }
-
-        internal static void EnsureCommonPayload(PortableLayout layout)
-        {
-            EnsureCommonPayload(layout, null);
-        }
-
-        internal static void EnsureCommonPayload(PortableLayout layout,
-            Action<FirstLaunchProgress> progress)
-        {
-            if (CommonPayloadComplete(layout)) return;
-            layout.EnsureDirectories();
-            Mutex mutation = PortableProcess.AcquireMutationMutex(layout, 0);
-            if (mutation == null)
-                throw new IOException("Another portable installation or repair is in progress.");
-            try
-            {
-                if (CommonPayloadComplete(layout)) return;
-                if (PortableProcess.IsDesktopRunning(layout))
-                    throw new IOException("Common runtime installation is blocked while Codex Desktop is running.");
-                if (!File.Exists(layout.CommonPackage))
-                    throw new FileNotFoundException("The bundled common runtime package is missing.", layout.CommonPackage);
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.ValidatingCommonPackage));
-                CommonArchiveInfo archiveInfo = ValidateCommonArchive(layout.CommonPackage);
-                DriveInfo drive = new DriveInfo(Path.GetPathRoot(layout.DataRoot));
-                if (drive.IsReady && drive.AvailableFreeSpace < archiveInfo.ExpandedBytes + 512L * 1024L * 1024L)
-                    throw new IOException("Insufficient free space for the common portable runtime.");
-                if (progress != null) progress(new FirstLaunchProgress(
-                    FirstLaunchPreparationStage.ExtractingCommonRuntime, 0,
-                    archiveInfo.ExpandedBytes, 0, archiveInfo.FileCount));
-                InstallCommonArchive(layout, archiveInfo, progress);
-                if (!CommonPayloadComplete(layout))
-                    throw new InvalidDataException("The installed common runtime is incomplete.");
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.CommonRuntimeReady));
-            }
-            finally { PortableProcess.ReleaseMutationMutex(mutation); }
-        }
-
-        internal static void EnsureDesktopPayload(PortableLayout layout)
-        {
-            EnsureDesktopPayload(layout, null);
-        }
-
-        internal static void EnsureDesktopPayload(PortableLayout layout,
-            Action<FirstLaunchProgress> progress)
-        {
-            if (File.Exists(layout.OfficialAppExe)) return;
-            if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture))
-                throw new PlatformNotSupportedException("No desktop package is available for this Windows architecture.");
-            if (!File.Exists(layout.BundledDesktopPackage))
-                throw new FileNotFoundException("The bundled desktop package is missing.", layout.BundledDesktopPackage);
-            Mutex mutation = PortableProcess.AcquireMutationMutex(layout, 0);
-            if (mutation == null)
-                throw new IOException("Another portable installation or repair is in progress.");
-            try
-            {
-                if (File.Exists(layout.OfficialAppExe)) return;
-                if (PortableProcess.IsDesktopRunning(layout))
-                    throw new IOException("Desktop installation is blocked while Codex Desktop is running.");
-                PortablePackage.StageVerifiedReleasePayload(layout, layout.BundledDesktopPackage,
-                    layout.Architecture, progress);
-                // The caller always revalidates the installed tree immediately
-                // before launch, after this mutation lock has been released.
-            }
-            finally { PortableProcess.ReleaseMutationMutex(mutation); }
-        }
+        // Older release archives may also contain the mutable plugin cache.
+        // Accept it as a trusted, ignorable input so those releases can still
+        // prepare a host image; cache entries are never copied into that image.
+        private const string LegacyPluginCacheRoot = "data/profile/.codex/plugins/cache";
 
         private sealed class CommonArchiveInfo
         {
@@ -1571,15 +1471,19 @@ namespace CodexPortable
             internal string DestinationRoot;
         }
 
-        // The local image contains only executables and runtimes.  Profile data
-        // and offline marketplace content continue to live on the portable
-        // volume, even while the program itself runs from the fixed disk.
+        // The local image contains executables, runtimes, and the read-only
+        // offline marketplace source. Mutable profile data and plugin caches
+        // continue to live on the portable volume.
         private static readonly ExecutionCommonRoot[] ExecutionCommonRoots = new ExecutionCommonRoot[] {
             new ExecutionCommonRoot { ArchiveRoot = "tools/dotnet", DestinationRoot = "tools/dotnet" },
             new ExecutionCommonRoot { ArchiveRoot = "tools/gh", DestinationRoot = "tools/gh" },
             new ExecutionCommonRoot {
                 ArchiveRoot = "data/profile/.cache/codex-runtimes/codex-primary-runtime",
                 DestinationRoot = "runtime"
+            },
+            new ExecutionCommonRoot {
+                ArchiveRoot = "data/profile/.codex/offline-marketplaces/openai-primary-runtime",
+                DestinationRoot = "marketplaces/openai-primary-runtime"
             }
         };
 
@@ -1618,7 +1522,7 @@ namespace CodexPortable
                     string relative = NormalizeArchivePath(entry.FullName);
                     return MapExecutionCommonPath(relative, directory);
                 });
-            AssertNoReparsePoints(staging);
+            PortablePackage.AssertExtractedTreeNoReparse(staging);
             AssertExecutionCommonFiles(staging);
         }
 
@@ -1645,6 +1549,7 @@ namespace CodexPortable
 
         private static string MapExecutionCommonPath(string relative, bool directory)
         {
+            if (IsExcludedCommonPath(relative)) return null;
             for (int i = 0; i < ExecutionCommonRoots.Length; i++)
             {
                 ExecutionCommonRoot root = ExecutionCommonRoots[i];
@@ -1674,6 +1579,9 @@ namespace CodexPortable
             if (!File.Exists(Path.Combine(root, "tools", "gh", "bin", "gh.exe")) &&
                 !File.Exists(Path.Combine(root, "tools", "gh", "gh.exe")))
                 throw new InvalidDataException("Execution-image common runtime is missing GitHub CLI.");
+            if (!File.Exists(Path.Combine(root, "marketplaces", "openai-primary-runtime",
+                ".agents", "plugins", "marketplace.json")))
+                throw new InvalidDataException("Execution-image common runtime is missing the primary marketplace.");
         }
 
         private static CommonArchiveInfo ValidateCommonArchive(string archivePath)
@@ -1758,7 +1666,13 @@ namespace CodexPortable
             // Plugin caches are derived after both trusted source packages are
             // installed. The unused F# SDK subtree is omitted to keep the GitHub
             // release below its hard asset-size limit without removing C#/VB.
-            if (IsExcludedCommonPath(path)) return false;
+            // Older archives may still carry the optional F# SDK subtree. It is
+            // trusted input but is intentionally omitted from the execution image.
+            if (IsExcludedCommonPath(path)) return true;
+            if (path.StartsWith(LegacyPluginCacheRoot + "/", StringComparison.OrdinalIgnoreCase) ||
+                (directory && (path.Equals(LegacyPluginCacheRoot, StringComparison.OrdinalIgnoreCase) ||
+                    LegacyPluginCacheRoot.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase))))
+                return true;
             for (int i = 0; i < CommonRoots.Length; i++)
             {
                 string root = CommonRoots[i];
@@ -1827,261 +1741,6 @@ namespace CodexPortable
                 throw new InvalidDataException("A common runtime file entry has a directory type.");
         }
 
-        private static void InstallCommonArchive(PortableLayout layout, CommonArchiveInfo archiveInfo,
-            Action<FirstLaunchProgress> progress)
-        {
-            string transaction = Path.Combine(layout.Updates, "common-" +
-                Guid.NewGuid().ToString("N").Substring(0, 10));
-            string staging = Path.Combine(transaction, "stage");
-            string backupRoot = Path.Combine(transaction, "backup");
-            string failedRoot = Path.Combine(transaction, "failed");
-            List<ActivatedRoot> activated = new List<ActivatedRoot>();
-            bool retain = false;
-            try
-            {
-                Directory.CreateDirectory(staging);
-                ExtractCommonArchiveWithTar(layout.CommonPackage, staging, archiveInfo, progress);
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.VerifyingCommonRuntime));
-                AssertNoReparsePoints(staging);
-                AssertCommonFiles(staging);
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.InstallingCommonRuntime));
-                for (int i = 0; i < CommonRoots.Length; i++)
-                {
-                    string relative = CommonRoots[i].Replace('/', Path.DirectorySeparatorChar);
-                    string source = Path.Combine(staging, relative);
-                    string destination = Path.Combine(layout.DataRoot, relative);
-                    RejectReparseAncestry(destination, layout.DataRoot);
-                    string backup = Path.Combine(backupRoot, relative);
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                    Directory.CreateDirectory(Path.GetDirectoryName(backup));
-                    ActivatedRoot record = new ActivatedRoot { Destination = destination, Backup = backup };
-                    activated.Add(record);
-                    if (Directory.Exists(destination))
-                    {
-                        Directory.Move(destination, backup);
-                        record.ExistingMoved = true;
-                    }
-                    Directory.Move(source, destination);
-                    record.NewMoved = true;
-                }
-                AssertCommonFiles(layout.DataRoot);
-            }
-            catch (Exception installationError)
-            {
-                Exception rollbackError = null;
-                for (int i = activated.Count - 1; i >= 0; i--)
-                {
-                    ActivatedRoot record = activated[i];
-                    try
-                    {
-                        if (record.NewMoved && Directory.Exists(record.Destination))
-                        {
-                            string failed = Path.Combine(failedRoot, i.ToString(CultureInfo.InvariantCulture));
-                            Directory.CreateDirectory(Path.GetDirectoryName(failed));
-                            Directory.Move(record.Destination, failed);
-                        }
-                        if (record.ExistingMoved && Directory.Exists(record.Backup))
-                        {
-                            Directory.CreateDirectory(Path.GetDirectoryName(record.Destination));
-                            Directory.Move(record.Backup, record.Destination);
-                        }
-                    }
-                    catch (Exception ex) { rollbackError = ex; }
-                }
-                if (rollbackError != null)
-                {
-                    retain = true;
-                    throw new IOException("Common runtime installation failed and rollback needs inspection at " +
-                        transaction + ".", new AggregateException(installationError, rollbackError));
-                }
-                throw;
-            }
-            finally
-            {
-                if (!retain && Directory.Exists(transaction))
-                    IOUtil.DeleteDirectoryWithin(transaction, layout.Updates);
-            }
-        }
-
-        private static void ExtractCommonArchiveWithTar(string archivePath, string staging,
-            CommonArchiveInfo expected, Action<FirstLaunchProgress> progress)
-        {
-            string tar = FindSystemTar();
-            using (FileStream source = new FileStream(archivePath, FileMode.Open, FileAccess.Read,
-                FileShare.Read, 1024 * 1024, FileOptions.SequentialScan))
-            using (ZipArchive archive = new ZipArchive(source, ZipArchiveMode.Read, false))
-            {
-                CommonArchiveInfo current = ValidateCommonArchiveEntries(archive);
-                AssertSameCommonArchive(expected, current);
-
-                object sync = new object();
-                HashSet<string> reportedFiles = new HashSet<string>(StringComparer.Ordinal);
-                StringBuilder diagnostics = new StringBuilder();
-                Stopwatch reporter = Stopwatch.StartNew();
-                long completedBytes = 0;
-                int completedFiles = 0;
-                Action<string> receiveLine = delegate(string line)
-                {
-                    if (string.IsNullOrEmpty(line)) return;
-                    bool shouldReport = false;
-                    long reportBytes = 0;
-                    int reportFiles = 0;
-                    if (line.StartsWith("x ", StringComparison.Ordinal))
-                    {
-                        string relative;
-                        try { relative = NormalizeArchivePath(line.Substring(2)); }
-                        catch { relative = string.Empty; }
-                        long length;
-                        lock (sync)
-                        {
-                            if (relative.Length != 0 && current.Files.TryGetValue(relative, out length) &&
-                                reportedFiles.Add(relative))
-                            {
-                                completedBytes = checked(completedBytes + length);
-                                completedFiles++;
-                                if (reporter.ElapsedMilliseconds >= ProgressReportIntervalMilliseconds ||
-                                    completedFiles == current.FileCount)
-                                {
-                                    shouldReport = true;
-                                    reportBytes = completedBytes;
-                                    reportFiles = completedFiles;
-                                    reporter.Restart();
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        lock (sync)
-                        {
-                            if (diagnostics.Length < 32768)
-                            {
-                                if (diagnostics.Length != 0) diagnostics.Append(" | ");
-                                diagnostics.Append(line);
-                            }
-                        }
-                    }
-                    if (shouldReport && progress != null)
-                        progress(new FirstLaunchProgress(
-                            FirstLaunchPreparationStage.ExtractingCommonRuntime,
-                            reportBytes, current.ExpandedBytes, reportFiles, current.FileCount));
-                };
-
-                ProcessStartInfo info = new ProcessStartInfo();
-                info.FileName = tar;
-                info.Arguments = "-xvf " + IOUtil.QuoteArgument(archivePath) + " -C " +
-                    IOUtil.QuoteArgument(staging);
-                info.WorkingDirectory = staging;
-                info.UseShellExecute = false;
-                info.CreateNoWindow = true;
-                info.RedirectStandardOutput = true;
-                info.RedirectStandardError = true;
-                using (Process process = new Process())
-                {
-                    process.StartInfo = info;
-                    process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
-                    {
-                        if (e.Data != null) receiveLine(e.Data);
-                    };
-                    process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
-                    {
-                        if (e.Data != null) receiveLine(e.Data);
-                    };
-                    if (!process.Start()) throw new InvalidOperationException("Windows tar.exe could not start.");
-                    process.BeginOutputReadLine();
-                    process.BeginErrorReadLine();
-                    if (!process.WaitForExit(ExtractionTimeoutMinutes * 60 * 1000))
-                    {
-                        try { process.Kill(); } catch { }
-                        try { process.WaitForExit(); } catch { }
-                        throw new TimeoutException("Common runtime extraction timed out.");
-                    }
-                    process.WaitForExit();
-                    if (process.ExitCode != 0)
-                    {
-                        string message;
-                        lock (sync) { message = diagnostics.ToString(); }
-                        throw new InvalidDataException("Windows tar.exe rejected the common runtime package" +
-                            (message.Length == 0 ? "." : ": " + message));
-                    }
-                }
-                PortablePackage.AssertExtractedTreeNoReparse(staging, current.ExpandedBytes,
-                    current.FileCount);
-                if (progress != null) progress(new FirstLaunchProgress(
-                    FirstLaunchPreparationStage.ExtractingCommonRuntime,
-                    current.ExpandedBytes, current.ExpandedBytes,
-                    current.FileCount, current.FileCount));
-            }
-        }
-
-        private static void AssertSameCommonArchive(CommonArchiveInfo expected,
-            CommonArchiveInfo actual)
-        {
-            if (expected == null || actual == null || expected.ExpandedBytes != actual.ExpandedBytes ||
-                expected.FileCount != actual.FileCount || expected.Files.Count != actual.Files.Count)
-                throw new InvalidDataException("The common runtime package changed before extraction.");
-            foreach (KeyValuePair<string, long> file in expected.Files)
-            {
-                long length;
-                if (!actual.Files.TryGetValue(file.Key, out length) || length != file.Value)
-                    throw new InvalidDataException("The common runtime package changed before extraction.");
-            }
-        }
-
-        private static string FindSystemTar()
-        {
-            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            if (!Environment.Is64BitProcess && Environment.Is64BitOperatingSystem)
-            {
-                string native = Path.Combine(windows, "Sysnative", "tar.exe");
-                if (File.Exists(native)) return native;
-            }
-            string system = Path.Combine(windows, "System32", "tar.exe");
-            if (File.Exists(system)) return system;
-            throw new FileNotFoundException("Windows tar.exe is required for common runtime extraction.", system);
-        }
-
-        private static void AssertCommonFiles(string root)
-        {
-            string[] required = new string[] {
-                "tools/dotnet/dotnet.exe",
-                "data/profile/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe",
-                "data/profile/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe",
-                "data/profile/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/git/cmd/git.exe",
-                "data/profile/.codex/offline-marketplaces/openai-primary-runtime/.agents/plugins/marketplace.json"
-            };
-            for (int i = 0; i < required.Length; i++)
-            {
-                string path = Path.Combine(root, required[i].Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(path)) throw new InvalidDataException("Common runtime is missing: " + required[i]);
-            }
-            if (!File.Exists(Path.Combine(root, "tools", "gh", "bin", "gh.exe")) &&
-                !File.Exists(Path.Combine(root, "tools", "gh", "gh.exe")))
-                throw new InvalidDataException("Common runtime is missing GitHub CLI.");
-        }
-
-        private static void AssertNoReparsePoints(string root)
-        {
-            PortablePackage.AssertExtractedTreeNoReparse(root);
-        }
-
-        private static void RejectReparseAncestry(string path, string root)
-        {
-            string current = Path.GetFullPath(path).TrimEnd('\\');
-            string limit = Path.GetFullPath(root).TrimEnd('\\');
-            if (!current.Equals(limit, StringComparison.OrdinalIgnoreCase) &&
-                !current.StartsWith(limit + "\\", StringComparison.OrdinalIgnoreCase))
-                throw new IOException("Common runtime destination is outside the portable root.");
-            while (current.Length >= limit.Length)
-            {
-                if (Directory.Exists(current) &&
-                    (new DirectoryInfo(current).Attributes & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("Common runtime destination is beneath a reparse point: " + current);
-                if (current.Equals(limit, StringComparison.OrdinalIgnoreCase)) break;
-                current = Path.GetDirectoryName(current);
-                if (string.IsNullOrEmpty(current)) break;
-            }
-        }
     }
 
     internal static class PortableOnboarding
@@ -2348,37 +2007,6 @@ namespace CodexPortable
             return (Icon)SystemIcons.Application.Clone();
         }
 
-        internal static void EnsurePortablePayload(PortableLayout layout)
-        {
-            // The release pipeline prepares and verifies the payload before it is
-            // published. Normal startup only verifies the payload and never
-            // rewrites the 200+ MiB ASAR on a USB volume. Package activation is
-            // the sole path that may prepare a desktop payload.
-            string official = layout.OfficialAppExe;
-            string alias = layout.AppExe;
-            string resources = layout.Resources;
-            if (!File.Exists(official))
-                throw new FileNotFoundException("Official Codex Desktop payload is missing.", official);
-            if (!File.Exists(alias))
-                throw new FileNotFoundException("Prepared Codex Desktop executable is missing.", alias);
-            if (!Directory.Exists(resources))
-                throw new DirectoryNotFoundException("Codex Desktop resources are missing.");
-            string[] requiredFiles = new string[] {
-                Path.Combine(resources, "app.asar"),
-                Path.Combine(resources, "codex-tray.ico"),
-                Path.Combine(resources, "chatgpt-tray-dark.ico"),
-                Path.Combine(resources, "chatgpt-tray-light.ico"),
-                Path.Combine(resources, "icon-chatgpt.ico"),
-                Path.Combine(resources, "icon.ico"),
-                Path.Combine(resources, "owl-electron-app.json")
-            };
-            for (int i = 0; i < requiredFiles.Length; i++)
-                if (!File.Exists(requiredFiles[i]))
-                    throw new FileNotFoundException("Prepared portable branding file is missing.", requiredFiles[i]);
-            if (!IsPrepared(layout))
-                throw new InvalidDataException("Existing Codex Desktop payload is not an LF-prepared, updater-disabled payload.");
-        }
-
         internal static void PreparePayload(string payloadRoot)
         {
             string official = Path.Combine(payloadRoot, "ChatGPT.exe");
@@ -2396,11 +2024,6 @@ namespace CodexPortable
             InstallEmbeddedIcon(DarkIconResource, Path.Combine(resources, "icon.ico"));
             AsarPortableBranding.EnsurePatched(Path.Combine(resources, "app.asar"));
             PrepareOwlMetadata(Path.Combine(resources, "owl-electron-app.json"));
-        }
-
-        internal static bool IsPrepared(PortableLayout layout)
-        {
-            return IsPrepared(layout.CurrentApp);
         }
 
         internal static bool IsPrepared(string payloadRoot)
@@ -2764,6 +2387,22 @@ namespace CodexPortable
         private static readonly string PortableWindowsSandboxSetupPendingGateText =
             "isWindowsSandboxSetupPending:!1".
                 PadRight(OfficialWindowsSandboxSetupPendingGateText.Length);
+        private const string OfficialWindowsSandboxRequirementText =
+            "windowsSandboxRequirement:mr";
+        private const string PortableWindowsSandboxRequirementText =
+            "windowsSandboxRequirement:!1";
+        private const string OfficialWindowsSandboxRequirementErrorText =
+            "hasWindowsSandboxRequirementError:fr";
+        private const string PortableWindowsSandboxRequirementErrorText =
+            "hasWindowsSandboxRequirementError:!1";
+        private const string OfficialWindowsSandboxRequirementPendingText =
+            "isWindowsSandboxRequirementPending:pr";
+        private const string PortableWindowsSandboxRequirementPendingText =
+            "isWindowsSandboxRequirementPending:!1";
+        private const string OfficialWindowsSandboxBannerRenderText =
+            "(0,u2.jsx)(xmc,{icon:u,title:d,detail:f,action:p})";
+        private static readonly string PortableWindowsSandboxBannerRenderText =
+            "null".PadRight(OfficialWindowsSandboxBannerRenderText.Length);
         private const string OfficialWindowsSandboxFinalStepText =
             "function es(e,t){return e.finalStep.shouldShow&&!t?q.WindowsSandboxSetup:q.Complete}";
         private static readonly string PortableWindowsSandboxFinalStepText =
@@ -3205,6 +2844,30 @@ namespace CodexPortable
                         PortableWindowsSandboxSetupPendingGateText) != 1)
                     throw new InvalidDataException(
                         "Electron Windows-sandbox setup-pending gate is missing or ambiguous: " +
+                        onboardingHeaderIcon.Path);
+                if (EnsurePattern(archive, onboardingHeaderIcon,
+                        OfficialWindowsSandboxRequirementText,
+                        PortableWindowsSandboxRequirementText) != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox requirement target is missing or ambiguous: " +
+                        onboardingHeaderIcon.Path);
+                if (EnsurePattern(archive, onboardingHeaderIcon,
+                        OfficialWindowsSandboxRequirementErrorText,
+                        PortableWindowsSandboxRequirementErrorText) != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox requirement-error target is missing or ambiguous: " +
+                        onboardingHeaderIcon.Path);
+                if (EnsurePattern(archive, onboardingHeaderIcon,
+                        OfficialWindowsSandboxRequirementPendingText,
+                        PortableWindowsSandboxRequirementPendingText) != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox requirement-pending target is missing or ambiguous: " +
+                        onboardingHeaderIcon.Path);
+                if (EnsurePattern(archive, onboardingHeaderIcon,
+                        OfficialWindowsSandboxBannerRenderText,
+                        PortableWindowsSandboxBannerRenderText) != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox status-banner render target is missing or ambiguous: " +
                         onboardingHeaderIcon.Path);
                 archive.FlushHeader();
             }
@@ -3677,6 +3340,22 @@ namespace CodexPortable
                             Encoding.UTF8.GetBytes(OfficialWindowsSandboxSetupPendingGateText)) != 0 ||
                         CountPattern(onboardingHeaderIconBytes,
                             Encoding.UTF8.GetBytes(PortableWindowsSandboxSetupPendingGateText)) != 1 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(OfficialWindowsSandboxRequirementText)) != 0 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(PortableWindowsSandboxRequirementText)) != 1 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(OfficialWindowsSandboxRequirementErrorText)) != 0 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(PortableWindowsSandboxRequirementErrorText)) != 1 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(OfficialWindowsSandboxRequirementPendingText)) != 0 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(PortableWindowsSandboxRequirementPendingText)) != 1 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(OfficialWindowsSandboxBannerRenderText)) != 0 ||
+                        CountPattern(onboardingHeaderIconBytes,
+                            Encoding.UTF8.GetBytes(PortableWindowsSandboxBannerRenderText)) != 1 ||
                         !IntegrityMatches(onboardingHeaderIcon,
                             ComputeIntegrity(onboardingHeaderIconBytes,
                                 onboardingHeaderIcon.BlockSize))) return false;
@@ -4369,7 +4048,6 @@ namespace CodexPortable
         private bool startWorkflowRunning;
         private bool closingAfterConfirm;
         private bool formIsClosing;
-        private bool portablePayloadChecked;
         private bool startupStatePrepared;
         private bool startupInitializationRunning;
         private bool requiredPluginCacheValidated;
@@ -4385,8 +4063,7 @@ namespace CodexPortable
         private sealed class StartupInitialization
         {
             internal bool SupportedArchitecture;
-            internal bool PayloadPresent;
-            internal bool BundledPayloadAvailable;
+            internal bool HostExecutionImageReady;
             internal bool ApiConfigured;
         }
 
@@ -4667,12 +4344,14 @@ namespace CodexPortable
                     ReportStartupInitializationProgress(4, "检查 Windows 架构", "Checking Windows architecture",
                         "确认当前系统可用的 Codex 程序包", "Finding the Codex package for this system");
                     result.SupportedArchitecture = ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture);
-                    result.BundledPayloadAvailable = result.SupportedArchitecture &&
-                        PortableBundle.HasInstallPackages(layout);
-                    ReportStartupInitializationProgress(5, "检查 LF 发布包", "Checking LF release package",
-                        "确认桌面程序与 API 配置", "Checking the desktop payload and API configuration");
-                    result.PayloadPresent = result.SupportedArchitecture &&
-                        (File.Exists(layout.OfficialAppExe) || result.BundledPayloadAvailable);
+                    PortableExecutionLayout execution;
+                    result.HostExecutionImageReady = result.SupportedArchitecture &&
+                        HostExecutionImage.TryGetReady(layout, out execution);
+                    // The launcher preflight is fixed-disk only.  A missing
+                    // image is imported from the release packages only after
+                    // the user explicitly clicks Start Codex.
+                    ReportStartupInitializationProgress(5, "检查本机执行镜像", "Checking local execution image",
+                        "确认固定盘执行镜像与 API 配置", "Checking the fixed-disk execution image and API configuration");
                     result.ApiConfigured = ProviderConfiguration.HasCompleteApiConfiguration(layout);
                     return result;
                 });
@@ -4696,15 +4375,12 @@ namespace CodexPortable
                     details.Text = string.Empty;
                     return;
                 }
-                if (!initialization.PayloadPresent)
+                if (!initialization.HostExecutionImageReady)
                 {
-                    status.Text = LauncherLocale.T("Codex Desktop 不完整", "Codex Desktop is incomplete");
-                    details.Text = string.Empty;
-                    return;
-                }
-                if (initialization.BundledPayloadAvailable && !File.Exists(layout.OfficialAppExe))
-                {
-                    RefreshStatus(LauncherLocale.T("就绪", "Ready"));
+                    status.Text = LauncherLocale.T("本机执行镜像未就绪", "Local execution image is not ready");
+                    details.Text = LauncherLocale.T(
+                        "点击“启动 Codex”时才会执行一次本机安装导入",
+                        "Click Start Codex to perform the one-time local installation import");
                     return;
                 }
                 if (initialization.ApiConfigured)
@@ -4870,11 +4546,6 @@ namespace CodexPortable
                     "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (!File.Exists(layout.OfficialAppExe) && !PortableBundle.HasInstallPackages(layout))
-            {
-                MessageBox.Show(LauncherLocale.T("未找到完整的 LF 发布包。", "The complete LF release package was not found."), "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
             if (!ProviderConfiguration.HasCompleteApiConfiguration(layout))
             {
                 MessageBox.Show(LauncherLocale.T("请先设置 API URL、API Key 和模型。", "Configure the API URL, API key and model before starting."),
@@ -4882,120 +4553,9 @@ namespace CodexPortable
                 SetKeyClicked(this, EventArgs.Empty);
                 return;
             }
-            bool needsCommonRuntime = !PortableBundle.CommonPayloadComplete(layout);
-            bool needsDesktopPackage = !File.Exists(layout.OfficialAppExe);
             startWorkflowRunning = true;
             SetBusy(true, null);
-            BeginLaunchProgressPlan(needsCommonRuntime, needsDesktopPackage, true);
-            if (needsDesktopPackage || needsCommonRuntime)
-            {
-                try
-                {
-                    ReportFirstLaunchPreparationStage(needsCommonRuntime ?
-                        FirstLaunchPreparationStage.ValidatingCommonPackage :
-                        FirstLaunchPreparationStage.ValidatingDesktopPackage);
-                    await Task.Run(delegate
-                    {
-                        PortableBundle.EnsureReady(layout, ReportFirstLaunchPreparationStage);
-                    });
-                    startupStatePrepared = true;
-                }
-                catch (Exception ex)
-                {
-                    SafeLog.TryWrite(layout, "provision", ex);
-                    if (CompleteCloseRequestDuringStart()) return;
-                    SetBusy(false, null);
-                    MessageBox.Show(LauncherLocale.T("首次启动准备失败。错误类型：" + ex.GetType().Name + "。请检查 U 盘空间和连接。",
-                        "First-launch preparation failed. Error type: " + ex.GetType().Name + ". Check USB space and connection."), "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    RefreshStatus(LauncherLocale.T("首次启动包安装失败", "First-launch package installation failed"));
-                    FinishStartWorkflow();
-                    return;
-                }
-            }
-            if (CompleteCloseRequestDuringStart()) return;
-            try
-            {
-                // Staging verifies the tree before activation, but the mutation
-                // lock is released before this point. Revalidate the installed
-                // tree immediately before handing off to the desktop process.
-                ReportFirstLaunchPreparationStage(FirstLaunchPreparationStage.VerifyingInstalledDesktop);
-                await Task.Run(delegate { EnsurePortablePayloadOnce(); });
-                if (CompleteCloseRequestDuringStart()) return;
-            }
-            catch (Exception ex)
-            {
-                SafeLog.TryWrite(layout, "portable-branding", ex);
-                if (CompleteCloseRequestDuringStart()) return;
-                SetBusy(false, null);
-                MessageBox.Show(LauncherLocale.T("无法校验 Codex 品牌与完整性。请生成诊断日志。",
-                    "Unable to verify Codex branding and integrity. Create a diagnostic report."),
-                    "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                RefreshStatus(LauncherLocale.T("Codex 完整性校验失败", "Codex integrity verification failed"));
-                FinishStartWorkflow();
-                return;
-            }
-            if (!File.Exists(layout.AppExe))
-            {
-                MessageBox.Show(LauncherLocale.T("应用文件不完整。", "The application files are incomplete."), "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-            if (!ArchitectureInfo.IsMachineCompatible(layout.OfficialAppExe, layout.Architecture) ||
-                !ArchitectureInfo.IsMachineCompatible(layout.AppExe, layout.Architecture))
-            {
-                MessageBox.Show(LauncherLocale.T("已安装的 Codex Desktop 包与 Windows 架构（" + layout.ArchitectureName + "）不匹配。启动前请更新便携包。",
-                    "The installed Codex Desktop payload does not match this Windows architecture (" + layout.ArchitectureName + "). Update the portable payload before starting."),
-                    "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-            if (!File.Exists(layout.CodexExe))
-            {
-                MessageBox.Show(LauncherLocale.T("应用文件不完整。", "The application files are incomplete."), "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-            if (!ArchitectureInfo.IsMachineCompatible(layout.CodexExe, layout.Architecture))
-            {
-                MessageBox.Show(LauncherLocale.T("内置 Codex CLI 与 Windows 架构（" + layout.ArchitectureName + "）不匹配。启动前请更新便携包。",
-                    "The bundled Codex CLI does not match this Windows architecture (" + layout.ArchitectureName + "). Update the portable payload before starting."),
-                    "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-            try
-            {
-                ReportFirstLaunchPreparationStage(FirstLaunchPreparationStage.VerifyingPluginCache);
-                int repairedPlugins = await Task.Run(delegate { return EnsureRequiredPluginCache(); });
-                if (repairedPlugins > 0)
-                    SafeLog.TryWriteEvent(layout, "plugin-cache-repair", "Restored " +
-                        repairedPlugins.ToString(CultureInfo.InvariantCulture) + " required plugin(s) before launch.");
-                if (CompleteCloseRequestDuringStart()) return;
-            }
-            catch (Exception ex)
-            {
-                SafeLog.TryWrite(layout, "plugin-cache-repair", ex);
-                if (CompleteCloseRequestDuringStart()) return;
-                SetBusy(false, null);
-                MessageBox.Show(LauncherLocale.T("必需插件缓存不完整，自动恢复失败。请确认 U 盘连接稳定后重试。\r\n\r\n错误类型：" + ex.GetType().Name,
-                    "The required plugin cache is incomplete and recovery failed. Check the USB connection and retry.\r\n\r\nError type: " + ex.GetType().Name),
-                    "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-            // Plugin cache validation above checks only the required manifest and
-            // reparse-point boundaries. Avoid a second cache traversal here;
-            // executable and marketplace prerequisites are still checked.
-            string missingPrerequisite = PortableEnvironment.FindMissingPrerequisite(layout,
-                !requiredPluginCacheValidated);
-            if (missingPrerequisite != null)
-            {
-                MessageBox.Show(LauncherLocale.T("便携运行库或插件不完整，禁止启动：\r\n" + missingPrerequisite,
-                    "The portable runtime or plugin cache is incomplete; startup is blocked:\r\n" + missingPrerequisite), "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                FinishStartWorkflow();
-                return;
-            }
-
+            BeginLaunchProgressPlan(false, false, true);
             PortableExecutionLayout execution = null;
             try
             {
@@ -5012,11 +4572,42 @@ namespace CodexPortable
                 if (CompleteCloseRequestDuringStart()) return;
                 SetBusy(false, null);
                 MessageBox.Show(LauncherLocale.T(
-                    "无法准备本机执行镜像。为避免 USB 映像读取错误，LF 不会直接从 U 盘运行 Codex。请确认 U 盘连接稳定且系统盘至少有 5 GB 可用空间后重试。\r\n\r\n错误类型：" + ex.GetType().Name,
-                    "Unable to prepare the local execution image. To prevent USB mapped-image failures, LF will not run Codex directly from the removable drive. Check the USB connection and keep at least 5 GB free on the system drive, then retry.\r\n\r\nError type: " + ex.GetType().Name),
+                    "无法准备本机执行镜像。请先在本机固定盘完成发布包导入；然后确认系统盘有足够空间。错误类型：" + ex.GetType().Name,
+                    "Unable to prepare the local execution image. Import the release packages on the fixed disk first, then verify local free space. Error type: " + ex.GetType().Name),
                     "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                RefreshStatus(LauncherLocale.T("本机执行镜像准备失败",
-                    "Local execution image preparation failed"));
+                RefreshStatus(LauncherLocale.T("本机执行镜像准备失败", "Local execution image preparation failed"));
+                FinishStartWorkflow();
+                return;
+            }
+            if (CompleteCloseRequestDuringStart()) return;
+            try
+            {
+                ReportFirstLaunchPreparationStage(FirstLaunchPreparationStage.VerifyingPluginCache);
+                int repairedPlugins = await Task.Run(delegate { return EnsureRequiredPluginCache(execution); });
+                if (repairedPlugins > 0)
+                    SafeLog.TryWriteEvent(layout, "plugin-cache-repair", "Restored " +
+                        repairedPlugins.ToString(CultureInfo.InvariantCulture) + " required plugin(s) before launch.");
+                if (CompleteCloseRequestDuringStart()) return;
+            }
+            catch (Exception ex)
+            {
+                SafeLog.TryWrite(layout, "plugin-cache-repair", ex);
+                if (CompleteCloseRequestDuringStart()) return;
+                SetBusy(false, null);
+                MessageBox.Show(LauncherLocale.T("必需插件缓存不完整，自动恢复失败。请确认 U 盘连接稳定后重试。\r\n\r\n错误类型：" + ex.GetType().Name,
+                    "The required plugin cache is incomplete and recovery failed. Check the USB connection and retry.\r\n\r\nError type: " + ex.GetType().Name),
+                    "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                FinishStartWorkflow();
+                return;
+            }
+            // The executable/runtime and read-only marketplace now come from the
+            // fixed-disk image; only mutable plugin caches remain on USB.
+            string missingPrerequisite = PortableEnvironment.FindMissingPrerequisite(layout,
+                execution, !requiredPluginCacheValidated);
+            if (missingPrerequisite != null)
+            {
+                MessageBox.Show(LauncherLocale.T("便携运行库或插件不完整，禁止启动：\r\n" + missingPrerequisite,
+                    "The portable runtime or plugin cache is incomplete; startup is blocked:\r\n" + missingPrerequisite), "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 FinishStartWorkflow();
                 return;
             }
@@ -5046,7 +4637,7 @@ namespace CodexPortable
                 // First-run package expansion can create profile content after the
                 // window's background initialization. Reassert the config-backed
                 // permission mode immediately before starting Desktop.
-                layout.EnsureConfig();
+                layout.EnsureConfig(execution);
                 layout.EnsureOnboardingSuppressed();
                 startupStatePrepared = true;
 
@@ -5102,7 +4693,7 @@ namespace CodexPortable
                             "Codex process creation failed with Win32=" +
                             processCreateFailure.NativeErrorCode.ToString(CultureInfo.InvariantCulture) +
                             "; preparing a local execution image.");
-                        await RevalidatePluginCacheAfterDesktopImageFailure();
+                        await RevalidatePluginCacheAfterDesktopImageFailure(execution);
                         if (CompleteCloseRequestDuringStart()) return;
                         BeginDesktopImageRecoveryProgressPlan();
                         execution = await Task.Run(delegate
@@ -5275,7 +4866,7 @@ namespace CodexPortable
                             throw new DesktopStartupExitException(earlyExitCode);
 
                         imageRecoveryAttempted = true;
-                        await RevalidatePluginCacheAfterDesktopImageFailure();
+                        await RevalidatePluginCacheAfterDesktopImageFailure(execution);
                         if (CompleteCloseRequestDuringStart()) return;
                         BeginDesktopImageRecoveryProgressPlan();
                         execution = await Task.Run(delegate
@@ -5630,53 +5221,41 @@ namespace CodexPortable
                 CultureInfo.CurrentCulture) + " " + unit;
         }
 
-        private int EnsureRequiredPluginCache()
+        private int EnsureRequiredPluginCache(PortableExecutionLayout execution)
         {
             // Cache the lightweight manifest result for this open launcher
             // window so the immediately following prerequisite check does not
             // repeat the same directory checks.
-            if (ProviderConfiguration.RequiredPluginCacheComplete(layout))
+            if (ProviderConfiguration.RequiredPluginCacheComplete(layout, execution))
             {
                 requiredPluginCacheValidated = true;
                 return 0;
             }
-            int repaired = ProviderConfiguration.EnsureRequiredPluginCache(layout);
-            if (!ProviderConfiguration.RequiredPluginCacheComplete(layout))
+            int repaired = ProviderConfiguration.EnsureRequiredPluginCache(layout, execution);
+            if (!ProviderConfiguration.RequiredPluginCacheComplete(layout, execution))
                 throw new InvalidDataException("Required plugin cache is still incomplete after recovery.");
             requiredPluginCacheValidated = true;
             return repaired;
         }
 
-        private async Task RevalidatePluginCacheAfterDesktopImageFailure()
+        private async Task RevalidatePluginCacheAfterDesktopImageFailure(
+            PortableExecutionLayout execution)
         {
             // The same removable-drive interruption that kills Electron can
             // invalidate a plugin file after the initial preflight. Never carry
             // the in-window validation result across a mapped-image failure.
             requiredPluginCacheValidated = false;
             ReportFirstLaunchPreparationStage(FirstLaunchPreparationStage.VerifyingPluginCache);
-            int repaired = await Task.Run(delegate { return EnsureRequiredPluginCache(); });
+            int repaired = await Task.Run(delegate { return EnsureRequiredPluginCache(execution); });
             if (repaired > 0)
                 SafeLog.TryWriteEvent(layout, "plugin-cache-repair", "Restored " +
                     repaired.ToString(CultureInfo.InvariantCulture) +
                     " required plugin(s) before the single desktop recovery retry.");
             string missingPrerequisite = PortableEnvironment.FindMissingPrerequisite(layout,
-                !requiredPluginCacheValidated);
+                execution, !requiredPluginCacheValidated);
             if (missingPrerequisite != null)
                 throw new InvalidDataException("Portable prerequisites changed during desktop recovery: " +
                     missingPrerequisite);
-        }
-
-        private void EnsurePortablePayloadOnce()
-        {
-            if (portablePayloadChecked) return;
-            PortableBranding.EnsurePortablePayload(layout);
-            portablePayloadChecked = true;
-        }
-
-        private void InvalidatePayloadPreflight()
-        {
-            portablePayloadChecked = false;
-            requiredPluginCacheValidated = false;
         }
 
         private static bool IsRecoverableDesktopImageExit(uint exitCode)
@@ -5984,19 +5563,46 @@ namespace CodexPortable
             }
             catch (Exception ex) { text.AppendLine("DriveInfoError=" + ex.GetType().Name); }
 
-            AppendFile(text, "CodexDesktop", layout.AppExe, false);
-            AppendFile(text, "OfficialCodexPayload", layout.OfficialAppExe, false);
+            PortableExecutionLayout diagnosticExecution = null;
+            try { diagnosticExecution = HostExecutionImage.GetExpectedLayout(layout); }
+            catch (Exception ex) { text.AppendLine("ExecutionImagePathError=" + ex.GetType().Name); }
+            if (diagnosticExecution != null)
+            {
+                text.AppendLine("ExecutionImageRoot=" + diagnosticExecution.Root);
+                AppendFile(text, "CodexDesktop", diagnosticExecution.AppExe, false);
+                AppendFile(text, "OfficialCodexPayload", diagnosticExecution.OfficialAppExe, false);
+            }
+            else
+            {
+                text.AppendLine("CodexDesktopExists=false");
+                text.AppendLine("OfficialCodexPayloadExists=false");
+            }
             text.AppendLine("DesktopPayloadTrust=Signed MSIX plus pinned identity verified before extraction");
             text.AppendLine("PortableDesktopProcessName=" + PortableBranding.DesktopExecutableName);
-            text.AppendLine("PortableBrandingPrepared=" + PortableBranding.IsPrepared(layout).ToString(CultureInfo.InvariantCulture));
-            AppendFile(text, "CodexCli", layout.CodexExe, false);
-            text.AppendLine("RuntimeDirectory=" + Directory.Exists(layout.Runtime).ToString(CultureInfo.InvariantCulture));
-            AppendFile(text, "RuntimeNode", Path.Combine(layout.Runtime, "dependencies", "node", "bin", "node.exe"), false);
-            AppendFile(text, "RuntimePython", Path.Combine(layout.Runtime, "dependencies", "python", "python.exe"), false);
-            AppendFile(text, "RuntimeGit", Path.Combine(layout.Runtime, "dependencies", "native", "git", "cmd", "git.exe"), false);
-            AppendFile(text, "PortableDotnet", Path.Combine(layout.Tools, "dotnet", "dotnet.exe"), false);
-            AppendFile(text, "PortableGh", File.Exists(Path.Combine(layout.Tools, "gh", "bin", "gh.exe")) ?
-                Path.Combine(layout.Tools, "gh", "bin", "gh.exe") : Path.Combine(layout.Tools, "gh", "gh.exe"), false);
+            bool prepared = diagnosticExecution != null &&
+                PortableBranding.IsPrepared(diagnosticExecution.AppRoot);
+            text.AppendLine("PortableBrandingPrepared=" + prepared.ToString(CultureInfo.InvariantCulture));
+            if (diagnosticExecution != null)
+            {
+                AppendFile(text, "CodexCli", diagnosticExecution.CodexExe, false);
+                text.AppendLine("RuntimeDirectory=" + Directory.Exists(diagnosticExecution.Runtime).ToString(CultureInfo.InvariantCulture));
+                AppendFile(text, "RuntimeNode", Path.Combine(diagnosticExecution.Runtime, "dependencies", "node", "bin", "node.exe"), false);
+                AppendFile(text, "RuntimePython", Path.Combine(diagnosticExecution.Runtime, "dependencies", "python", "python.exe"), false);
+                AppendFile(text, "RuntimeGit", Path.Combine(diagnosticExecution.Runtime, "dependencies", "native", "git", "cmd", "git.exe"), false);
+                AppendFile(text, "PortableDotnet", Path.Combine(diagnosticExecution.Tools, "dotnet", "dotnet.exe"), false);
+                AppendFile(text, "PortableGh", File.Exists(Path.Combine(diagnosticExecution.Tools, "gh", "bin", "gh.exe")) ?
+                    Path.Combine(diagnosticExecution.Tools, "gh", "bin", "gh.exe") : Path.Combine(diagnosticExecution.Tools, "gh", "gh.exe"), false);
+            }
+            else
+            {
+                text.AppendLine("CodexCliExists=false");
+                text.AppendLine("RuntimeDirectory=false");
+                text.AppendLine("RuntimeNodeExists=false");
+                text.AppendLine("RuntimePythonExists=false");
+                text.AppendLine("RuntimeGitExists=false");
+                text.AppendLine("PortableDotnetExists=false");
+                text.AppendLine("PortableGhExists=false");
+            }
             text.AppendLine("ConfigExists=" + File.Exists(layout.ConfigFile).ToString(CultureInfo.InvariantCulture));
             if (File.Exists(layout.ConfigFile))
             {
@@ -6047,7 +5653,7 @@ namespace CodexPortable
                 (diagnosticEnvironment.TryGetValue(PortableEnvironment.RemoteControlDisabledEnvironmentVariable, out remoteControlDisabled) &&
                 string.Equals(remoteControlDisabled, "1", StringComparison.Ordinal)).ToString(CultureInfo.InvariantCulture));
             diagnosticEnvironment.Clear();
-            text.AppendLine("PerformanceScratchPolicy=host-temp-per-session; clean-on-exit; portable fallback on failure");
+            text.AppendLine("PerformanceScratchPolicy=host-temp-per-session; clean-on-exit; startup blocked if unavailable");
             text.AppendLine("PlaintextApiKeyConfigured=" + (!string.IsNullOrEmpty(ProviderConfiguration.ReadStoredApiKey(layout))).ToString(CultureInfo.InvariantCulture));
             text.AppendLine("CustomBaseUrlConfigured=" + (!string.IsNullOrEmpty(ProviderConfiguration.ReadEffectiveBaseUrl(layout))).ToString(CultureInfo.InvariantCulture));
             text.AppendLine("CustomModelConfigured=" + (!string.IsNullOrEmpty(ProviderConfiguration.ReadEffectiveModel(layout))).ToString(CultureInfo.InvariantCulture));
@@ -6194,7 +5800,9 @@ namespace CodexPortable
 
         internal static string ActiveChromiumCache(PortableLayout layout)
         {
-            return IsPrepared(layout) ? layout.HostChromiumCache : layout.ChromiumCache;
+            if (!IsPrepared(layout))
+                throw new InvalidOperationException("A fixed local scratch directory is required for Chromium cache writes.");
+            return layout.HostChromiumCache;
         }
 
         internal static void Cleanup(PortableLayout layout)
@@ -6374,7 +5982,7 @@ namespace CodexPortable
             string target = NormalizeDirectoryPath(path);
             // NormalizeDirectoryPath keeps the trailing separator for a volume
             // root (for example, E:\).  Do not append a second separator when
-            // constructing the containment prefix; USB packages commonly live
+            // constructing the containment prefix; portable data commonly lives
             // directly at the drive root.
             string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(),
                 StringComparison.Ordinal) ||
@@ -7765,6 +7373,12 @@ namespace CodexPortable
 
         internal static void WriteDeterministicConfig(PortableLayout layout)
         {
+            WriteDeterministicConfig(layout, HostExecutionImage.GetExpectedLayout(layout));
+        }
+
+        internal static void WriteDeterministicConfig(PortableLayout layout,
+            PortableExecutionLayout execution)
+        {
             Directory.CreateDirectory(layout.CodexHome);
             string baseUrl = ReadEffectiveBaseUrl(layout) ?? UnconfiguredBaseUrl;
             string model = ReadEffectiveModel(layout);
@@ -7790,9 +7404,16 @@ namespace CodexPortable
                 }
             }
             catch { }
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(layout);
             string[] requiredPlugins = GetRequiredPlugins(layout.Architecture);
-            string bundledMarketplace = Path.Combine(layout.Resources, "plugins", "openai-bundled");
-            string primaryMarketplace = Path.Combine(layout.CodexHome, "offline-marketplaces", "openai-primary-runtime");
+            string bundledResources = execution.Resources;
+            // Keep config.toml portable.  The file is stored with the mutable
+            // profile on the USB, while Codex is started with execution.AppRoot
+            // as its working directory.  Relative marketplace sources therefore
+            // resolve to the host-local execution image at launch and do not
+            // retain this machine's absolute %LOCALAPPDATA% path on the USB.
+            string bundledMarketplace = "resources/plugins/openai-bundled";
+            string primaryMarketplace = "../../marketplaces/openai-primary-runtime";
             StringBuilder text = new StringBuilder();
             text.AppendLine("# Managed by LF Portable. approval_policy and sandbox_mode remain config.toml settings.");
             text.AppendLine("model = " + QuoteToml(model));
@@ -7861,18 +7482,43 @@ namespace CodexPortable
 
         internal static int EnsureRequiredPluginCache(PortableLayout layout)
         {
+            return EnsureRequiredPluginCache(layout, null);
+        }
+
+        internal static int EnsureRequiredPluginCache(PortableLayout layout,
+            PortableExecutionLayout execution)
+        {
             if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture))
                 throw new InvalidDataException("No official plugin cache can be repaired for architecture: " +
                     ArchitectureInfo.NameOf(layout.Architecture));
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(layout);
+            string bundledResources = execution.Resources;
+            string primaryMarketplace = GetPrimaryMarketplace(layout, execution);
             return PluginCacheRecovery.EnsureRequiredPlugins(layout,
-                GetRequiredPlugins(layout.Architecture));
+                GetRequiredPlugins(layout.Architecture), bundledResources, primaryMarketplace);
         }
 
         internal static bool RequiredPluginCacheComplete(PortableLayout layout)
         {
+            return RequiredPluginCacheComplete(layout, null);
+        }
+
+        internal static bool RequiredPluginCacheComplete(PortableLayout layout,
+            PortableExecutionLayout execution)
+        {
             if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture)) return false;
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(layout);
+            string bundledResources = execution.Resources;
+            string primaryMarketplace = GetPrimaryMarketplace(layout, execution);
             return PluginCacheRecovery.RequiredPluginCacheComplete(layout,
-                GetRequiredPlugins(layout.Architecture));
+                GetRequiredPlugins(layout.Architecture), bundledResources, primaryMarketplace);
+        }
+
+        private static string GetPrimaryMarketplace(PortableLayout layout,
+            PortableExecutionLayout execution)
+        {
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(layout);
+            return execution.PrimaryMarketplace;
         }
 
         private static string EscapeToml(string value)
@@ -7943,13 +7589,165 @@ namespace CodexPortable
         internal string CodexExe;
         internal string Runtime;
         internal string Tools;
+        internal string PrimaryMarketplace;
     }
 
     internal static class HostExecutionImage
     {
+        private const string HostProductDirectoryName = "LFPortable";
+        private const string HostPreparationArgument = "--prepare-host-execution-image";
         private const long MaximumExecutionBytes = 8L * 1024L * 1024L * 1024L;
         private const int MaximumExecutionFiles = 200000;
         private const long FreeSpaceReserveBytes = 1024L * 1024L * 1024L;
+
+        internal static bool IsHostPreparationArgument(string argument)
+        {
+            return string.Equals(argument, HostPreparationArgument,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static int FindHostPreparationArgument(string[] args)
+        {
+            if (args == null) return -1;
+            for (int i = 0; i < args.Length; i++)
+                if (IsHostPreparationArgument(args[i])) return i;
+            return -1;
+        }
+
+        // This command is intentionally separate from normal portable-root
+        // startup. It imports release packages from a fixed-disk release
+        // directory, then leaves only the resulting image and package cache on
+        // the host. The USB launcher never performs this import implicitly.
+        internal static int RunHostPreparation(string[] args, int argumentIndex)
+        {
+            string releaseRoot = null;
+            PortableArchitecture architecture = ArchitectureInfo.Current;
+            bool quiet = false;
+            for (int i = argumentIndex + 1; i < (args == null ? 0 : args.Length); i++)
+            {
+                if (string.Equals(args[i], "--release-root", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 >= args.Length || !string.IsNullOrEmpty(releaseRoot)) return 41;
+                    releaseRoot = args[++i];
+                }
+                else if (string.Equals(args[i], "--architecture", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 >= args.Length) return 41;
+                    architecture = ArchitectureInfo.ParseName(args[++i]);
+                }
+                else if (string.Equals(args[i], "--quiet", StringComparison.OrdinalIgnoreCase))
+                {
+                    quiet = true;
+                }
+                else return 41;
+            }
+            if (string.IsNullOrEmpty(releaseRoot) ||
+                !ArchitectureInfo.HasOfficialDesktopPayload(architecture) ||
+                architecture != ArchitectureInfo.Current) return 41;
+            try
+            {
+                PrepareFromReleaseRoot(releaseRoot, architecture, null);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                if (!quiet)
+                    MessageBox.Show("LF Portable host preparation failed.\r\n\r\n" +
+                        ex.GetType().Name + ": " + ex.Message, "LF Portable",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 44;
+            }
+        }
+
+        internal static void PrepareFromReleaseRoot(string releaseRoot,
+            PortableArchitecture architecture, Action<FirstLaunchProgress> progress)
+        {
+            if (!ArchitectureInfo.HasOfficialDesktopPayload(architecture))
+                throw new InvalidDataException("No official desktop payload is published for this architecture.");
+            string sourceRoot = Path.GetFullPath(releaseRoot ?? "").TrimEnd('\\');
+            if (string.IsNullOrEmpty(sourceRoot) || !Directory.Exists(sourceRoot))
+                throw new DirectoryNotFoundException("Release root is missing: " + releaseRoot);
+            string sourceVolumeRoot = Path.GetPathRoot(sourceRoot);
+            if (IsCodexUsbVolume(sourceVolumeRoot))
+                throw new IOException("Host preparation must read the release from a fixed-disk source, not CODEX_USB.");
+            DriveInfo sourceDrive = new DriveInfo(sourceVolumeRoot);
+            if (!sourceDrive.IsReady || sourceDrive.DriveType != DriveType.Fixed)
+                throw new IOException("Host preparation must read a release directory on a fixed local drive.");
+
+            string sourceCommon = Path.Combine(sourceRoot, "CodexData", "packages",
+                "LFPortable-common.zip");
+            string sourceDesktop = Path.Combine(sourceRoot, "CodexData", "packages",
+                "LFPortable-" + ArchitectureInfo.NameOf(architecture) + ".msix");
+            PortableLayout sourceLayout = CreatePackageLayout(architecture, sourceRoot,
+                sourceCommon, sourceDesktop);
+            using (PortablePackage.ExecutionImagePackageLease sourceLease =
+                PortablePackage.VerifyExecutionImagePackages(sourceLayout, progress))
+            {
+                // Validate the common archive before it can enter the host
+                // cache; extraction performs the same validation again while
+                // holding the cache files open.
+                PortableBundle.InspectExecutionImageArchive(sourceLease.CommonStream);
+            }
+
+            string cacheRoot = GetPackageCacheRoot(architecture);
+            EnsureSafePackageCacheRoot(cacheRoot, true);
+            string cacheCommon = Path.Combine(cacheRoot, "LFPortable-common.zip");
+            string cacheDesktop = Path.Combine(cacheRoot,
+                "LFPortable-" + ArchitectureInfo.NameOf(architecture) + ".msix");
+            CopyPackageAtomically(sourceCommon, cacheCommon);
+            CopyPackageAtomically(sourceDesktop, cacheDesktop);
+
+            PortableLayout cacheLayout = CreatePackageLayout(architecture, sourceRoot,
+                cacheCommon, cacheDesktop);
+            EnsureReady(cacheLayout, false, progress);
+        }
+
+        private static PortableLayout CreatePackageLayout(PortableArchitecture architecture,
+            string root, string commonPackage, string desktopPackage)
+        {
+            PortableLayout layout = new PortableLayout();
+            layout.Root = root;
+            layout.Architecture = architecture;
+            layout.ArchitectureName = ArchitectureInfo.NameOf(architecture);
+            layout.CommonPackage = commonPackage;
+            layout.BundledDesktopPackage = desktopPackage;
+            layout.DataRoot = root;
+            layout.Logs = Path.Combine(Path.GetDirectoryName(
+                Path.GetFullPath(GetGlobalCacheRoot())).TrimEnd('\\'), "logs");
+            return layout;
+        }
+
+        private static void CopyPackageAtomically(string source, string destination)
+        {
+            string directory = Path.GetDirectoryName(destination);
+            Directory.CreateDirectory(directory);
+            string temporary = Path.Combine(directory, ".package-" +
+                Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.Copy(source, temporary, true);
+                IOUtil.AtomicReplaceFile(temporary, destination);
+            }
+            finally { IOUtil.TryDelete(temporary); }
+        }
+
+        private static bool IsCodexUsbVolume(string volumeRoot)
+        {
+            if (string.IsNullOrEmpty(volumeRoot)) return false;
+            try
+            {
+                StringBuilder label = new StringBuilder(256);
+                uint serial;
+                uint maximumComponentLength;
+                uint flags;
+                if (!NativeMethods.GetVolumeInformation(volumeRoot, label,
+                    (uint)label.Capacity, out serial, out maximumComponentLength,
+                    out flags, null, 0)) return false;
+                return string.Equals(label.ToString(), "CODEX_USB",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
 
         internal static bool TryGetReady(PortableLayout layout,
             out PortableExecutionLayout execution)
@@ -7957,7 +7755,7 @@ namespace CodexPortable
             execution = null;
             try
             {
-                string family = GetFamilyRoot(layout);
+                string family = GetFamilyRoot(layout.Architecture);
                 return TryGetReady(layout, family, out execution);
             }
             catch { return false; }
@@ -7969,21 +7767,17 @@ namespace CodexPortable
             execution = null;
             try
             {
-                string root = GetVersionRoot(layout, family);
-                if (!EnsureSafeExecutionFamily(layout, family, false) ||
+                string root = GetVersionRoot(family);
+                if (!EnsureSafeExecutionFamily(family, false) ||
                     !AssertSafeCacheEntry(root, family, false) ||
                     HasPendingInvalidation(family, root)) return false;
                 PortableExecutionLayout candidate = BuildLayout(root);
                 if (!Validate(candidate, layout.Architecture)) return false;
-                int elevationError;
-                TokenElevationState elevation = WindowsTokenElevation.Query(out elevationError);
-                if (elevation == TokenElevationState.Unavailable || elevationError != 0) return false;
-                // The local cache is intentionally rebuilt for an elevated
-                // launch. Comparing it with the mutable expanded USB tree would
-                // reintroduce the very source-of-truth ambiguity this image is
-                // designed to remove; the rebuild below verifies both archives
-                // and their MSIX signature while holding read leases.
-                if (elevation == TokenElevationState.Elevated) return false;
+                // Elevation changes the launch token, not the bytes or validity
+                // of the fixed-disk execution image.  Requiring Administrator
+                // at the portable entry point must not turn every normal start
+                // into a rebuild from release packages; only a missing,
+                // invalid, or explicitly invalidated image may be rebuilt.
                 execution = candidate;
                 return true;
             }
@@ -7993,7 +7787,7 @@ namespace CodexPortable
         internal static PortableExecutionLayout EnsureReady(PortableLayout layout,
             bool forceRebuild, Action<FirstLaunchProgress> progress)
         {
-            string family = GetFamilyRoot(layout);
+            string family = GetFamilyRoot(layout.Architecture);
             PortableExecutionLayout ready;
             if (!forceRebuild && TryGetReady(layout, family, out ready))
             {
@@ -8005,9 +7799,6 @@ namespace CodexPortable
                 return ready;
             }
 
-            Mutex mutation = PortableProcess.AcquireMutationMutex(layout, 0);
-            if (mutation == null)
-                throw new IOException("Another portable installation or execution-image repair is in progress.");
             Mutex local = null;
             bool localAcquired = false;
             string staging = null;
@@ -8018,14 +7809,15 @@ namespace CodexPortable
                 catch (AbandonedMutexException) { localAcquired = true; }
                 if (!localAcquired)
                     throw new IOException("The local execution image is already being prepared.");
-                if (forceRebuild) WaitForDesktopExit(layout, 10000);
-                if (PortableProcess.IsDesktopRunning(layout))
-                    throw new IOException("The local execution image cannot be replaced while Codex Desktop is running.");
-                string destination = GetVersionRoot(layout, family);
-                EnsureSafeExecutionFamily(layout, family, true);
+                string destination = GetVersionRoot(family);
+                EnsureSafeExecutionFamily(family, true);
                 AssertSafeCacheEntry(destination, family, true);
                 RecoverInterruptedReplacement(layout, family, destination);
                 if (!forceRebuild && TryGetReady(layout, family, out ready)) return ready;
+                if (forceRebuild) WaitForExecutionImageExit(destination, 10000);
+                if (Directory.Exists(destination) &&
+                    PortableProcess.IsAnyExecutableRunningUnderRoot(destination))
+                    throw new IOException("The shared local execution image is still in use.");
 
                 if (progress != null)
                     progress(new FirstLaunchProgress(FirstLaunchPreparationStage.ValidatingHostExecutionImage));
@@ -8092,7 +7884,8 @@ namespace CodexPortable
                 // A user might start an existing local image while a long package
                 // extraction is underway. Never activate a replacement after that
                 // point, even if the first check preceded the extraction.
-                if (PortableProcess.IsDesktopRunning(layout))
+                if (Directory.Exists(destination) &&
+                    PortableProcess.IsAnyExecutableRunningUnderRoot(destination))
                     throw new IOException("Codex Desktop started while the local execution image was being prepared.");
                 PortableExecutionLayout staged = BuildLayout(staging);
                 if (!Validate(staged, layout.Architecture))
@@ -8164,14 +7957,13 @@ namespace CodexPortable
                     try { local.ReleaseMutex(); } catch { }
                 }
                 if (local != null) local.Dispose();
-                PortableProcess.ReleaseMutationMutex(mutation);
             }
         }
 
-        private static void WaitForDesktopExit(PortableLayout layout, int timeoutMilliseconds)
+        private static void WaitForExecutionImageExit(string executionRoot, int timeoutMilliseconds)
         {
             Stopwatch deadline = Stopwatch.StartNew();
-            while (PortableProcess.IsDesktopRunning(layout) &&
+            while (PortableProcess.IsAnyExecutableRunningUnderRoot(executionRoot) &&
                 deadline.ElapsedMilliseconds < timeoutMilliseconds)
                 Thread.Sleep(50);
         }
@@ -8199,7 +7991,7 @@ namespace CodexPortable
                 {
                     string quarantine = Path.Combine(family, ".invalid-" + destinationName + "-" +
                         Guid.NewGuid().ToString("N").Substring(0, 10) + "-recovery");
-                    if (!EnsureSafeExecutionFamily(layout, family, false))
+                    if (!EnsureSafeExecutionFamily(family, false))
                         throw new IOException("The invalid execution-image family is unavailable for recovery.");
                     AssertSafeCacheEntry(destination, family, false);
                     AssertSafeCacheEntry(quarantine, family, true);
@@ -8306,18 +8098,19 @@ namespace CodexPortable
                 string candidate = Path.GetFullPath(directories[i]).TrimEnd('\\');
                 if (string.Equals(candidate, activeFull, StringComparison.OrdinalIgnoreCase)) continue;
                 AssertSafeCacheEntry(candidate, family, false);
+                if (PortableProcess.IsAnyExecutableRunningUnderRoot(candidate)) continue;
                 IOUtil.DeleteDirectoryWithin(candidate, family);
             }
         }
 
         internal static bool IsExecutionPathForLayout(PortableLayout layout, string executable)
         {
-            // Execution images are partitioned by the portable root's volume
-            // token and architecture.  Only the family derived from this
-            // layout belongs to this instance; a global-cache fallback would
-            // make another USB's LF desktop block this root.
+            // The executable image is a machine-local resource shared by all
+            // portable roots of the same architecture.  Root isolation is kept
+            // by the per-portable job/mutex, not by duplicating the image for
+            // every USB volume.
             if (layout == null) return false;
-            try { return IsExecutionPathForFamily(GetFamilyRoot(layout), executable); }
+            try { return IsExecutionPathForFamily(GetFamilyRoot(layout.Architecture), executable); }
             catch { return false; }
         }
 
@@ -8356,6 +8149,40 @@ namespace CodexPortable
             if (!drive.IsReady || drive.DriveType != DriveType.Fixed)
                 throw new InvalidOperationException("The execution image requires a ready fixed local drive.");
             return Path.Combine(local, "LFPortable", "execution");
+        }
+
+        internal static string GetPackageCacheRoot(PortableArchitecture architecture)
+        {
+            if (!ArchitectureInfo.HasOfficialDesktopPayload(architecture))
+                throw new InvalidOperationException("A host package cache requires a supported desktop architecture.");
+            string executionRoot = GetGlobalCacheRoot();
+            string hostRoot = Path.GetDirectoryName(Path.GetFullPath(executionRoot)).TrimEnd('\\');
+            return Path.Combine(hostRoot, "packages", ArchitectureInfo.NameOf(architecture),
+                GetVersionName());
+        }
+
+        private static void EnsureSafePackageCacheRoot(string root, bool create)
+        {
+            string local = Path.GetFullPath(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData)).TrimEnd('\\');
+            string hostRoot = Path.Combine(local, HostProductDirectoryName);
+            string packagesRoot = Path.Combine(hostRoot, "packages");
+            string expected = Path.GetFullPath(root).TrimEnd('\\');
+            if (!expected.StartsWith(packagesRoot + "\\", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The host package cache path is unsafe.");
+            string relative = expected.Substring(packagesRoot.Length).TrimStart('\\');
+            string[] segments = relative.Split(new char[] { '\\' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length != 2 ||
+                !ArchitectureInfo.HasOfficialDesktopPayload(ArchitectureInfo.ParseName(segments[0])) ||
+                !string.Equals(segments[1], GetVersionName(), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The host package cache architecture is invalid.");
+            if (!EnsureSafeDirectory(local, false) ||
+                !EnsureSafeDirectory(hostRoot, create) ||
+                !EnsureSafeDirectory(packagesRoot, create) ||
+                !EnsureSafeDirectory(Path.Combine(packagesRoot, segments[0]), create) ||
+                !EnsureSafeDirectory(expected, create))
+                throw new IOException("The host package cache directory is unavailable.");
         }
 
         internal static string GetPreparationMutexNameForFamily(string family)
@@ -8476,12 +8303,12 @@ namespace CodexPortable
                 string relative = familyFull.Substring(global.Length + 1);
                 string[] segments = relative.Split(new char[] { '\\' },
                     StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length != 2 || !IsPortableRootToken(segments[0]) ||
-                    !(string.Equals(segments[1], "x86", StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(segments[1], "x64", StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(segments[1], "arm64", StringComparison.OrdinalIgnoreCase))) return false;
-                volumeToken = segments[0];
-                architecture = segments[1].ToLowerInvariant();
+                if (segments.Length != 1 ||
+                    !(string.Equals(segments[0], "x86", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(segments[0], "x64", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(segments[0], "arm64", StringComparison.OrdinalIgnoreCase))) return false;
+                volumeToken = "machine";
+                architecture = segments[0].ToLowerInvariant();
                 return true;
             }
             catch
@@ -8493,38 +8320,15 @@ namespace CodexPortable
             }
         }
 
-        private static bool IsPortableRootToken(string value)
-        {
-            const string prefix = "root-";
-            if (string.IsNullOrEmpty(value) || value.Length != prefix.Length + 16 ||
-                !value.StartsWith(prefix, StringComparison.Ordinal)) return false;
-            for (int i = prefix.Length; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-            }
-            return true;
-        }
-
-        private static bool EnsureSafeExecutionFamily(PortableLayout layout,
-            string family, bool create)
+        private static bool EnsureSafeExecutionFamily(string family, bool create)
         {
             string local = Path.GetFullPath(Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData)).TrimEnd('\\');
             string global = Path.GetFullPath(GetGlobalCacheRoot()).TrimEnd('\\');
             string familyFull = Path.GetFullPath(family).TrimEnd('\\');
-            string portableRoot = Path.GetFullPath(layout.Root).TrimEnd('\\');
             if (!familyFull.StartsWith(global + "\\", StringComparison.OrdinalIgnoreCase) ||
-                familyFull.StartsWith(portableRoot + "\\", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(familyFull, portableRoot, StringComparison.OrdinalIgnoreCase))
+                string.Equals(familyFull, global, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The execution-image family path is unsafe.");
-
-            DriveInfo portableDrive = new DriveInfo(Path.GetPathRoot(portableRoot));
-            if (portableDrive.IsReady && (portableDrive.DriveType == DriveType.Removable ||
-                string.Equals(portableDrive.VolumeLabel, "CODEX_USB", StringComparison.OrdinalIgnoreCase)) &&
-                string.Equals(Path.GetPathRoot(global), Path.GetPathRoot(portableRoot),
-                    StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The execution image cannot use the removable portable volume.");
 
             if (!EnsureSafeDirectory(local, false)) return false;
             string cursor = local;
@@ -8590,35 +8394,32 @@ namespace CodexPortable
             return true;
         }
 
-        internal static string GetFamilyRoot(PortableLayout layout)
+        internal static string GetFamilyRoot(PortableArchitecture architecture)
         {
-            return Path.Combine(GetGlobalCacheRoot(), GetPortableRootToken(layout), layout.ArchitectureName);
+            return Path.Combine(GetGlobalCacheRoot(), ArchitectureInfo.NameOf(architecture));
         }
 
-        private static string GetVersionRoot(PortableLayout layout)
+        private static string GetVersionRoot(string family)
         {
-            return GetVersionRoot(layout, GetFamilyRoot(layout));
+            // Cache lookup is entirely fixed-disk local.  The launcher version
+            // is the release boundary; package files are opened only when this
+            // local image is missing or explicitly invalidated.
+            return Path.Combine(family, GetVersionName());
         }
 
-        private static string GetVersionRoot(PortableLayout layout, string family)
+        private static string GetVersionName()
         {
-            // Cache lookup must not enumerate or hash the large USB archives.
-            // A manual package replacement carries a new launcher version; the
-            // two lengths also separate locally rebuilt package variants.
             Version launcherVersion = Assembly.GetExecutingAssembly().GetName().Version;
-            FileInfo common = new FileInfo(layout.CommonPackage);
-            FileInfo desktop = new FileInfo(layout.BundledDesktopPackage);
-            if (!common.Exists || common.Length <= 0 || !desktop.Exists || desktop.Length <= 0)
-                throw new InvalidDataException("The portable execution packages are unavailable.");
-            string packageIdentity = "c" + common.Length.ToString("x", CultureInfo.InvariantCulture) +
-                "-d" + desktop.Length.ToString("x", CultureInfo.InvariantCulture);
-            string key = "desktop-lf-" + launcherVersion.ToString() + "-pkg-" + packageIdentity;
-            return Path.Combine(family, key);
+            return "desktop-lf-" + launcherVersion.ToString();
         }
 
-        private static string GetPortableRootToken(PortableLayout layout)
+        // Return the deterministic fixed-disk layout without inspecting the USB
+        // root or requiring the image to exist. Callers use this for config and
+        // environment generation during the pre-build portion of startup.
+        internal static PortableExecutionLayout GetExpectedLayout(PortableLayout layout)
         {
-            return PortableProcess.GetRootToken(layout);
+            if (layout == null) throw new ArgumentNullException("layout");
+            return BuildLayout(GetVersionRoot(GetFamilyRoot(layout.Architecture)));
         }
 
         private static PortableExecutionLayout BuildLayout(string root)
@@ -8633,6 +8434,7 @@ namespace CodexPortable
             execution.CodexExe = Path.Combine(execution.Resources, "codex.exe");
             execution.Runtime = Path.Combine(root, "runtime");
             execution.Tools = Path.Combine(root, "tools");
+            execution.PrimaryMarketplace = Path.Combine(root, "marketplaces", "openai-primary-runtime");
             return execution;
         }
 
@@ -8651,6 +8453,7 @@ namespace CodexPortable
                     Path.Combine(execution.Resources, "cua_node", "bin", "node_repl.exe"),
                     Path.Combine(execution.Resources, "cua_node", "bin", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"),
                     Path.Combine(execution.Resources, "plugins", "openai-bundled", ".agents", "plugins", "marketplace.json"),
+                    Path.Combine(execution.PrimaryMarketplace, ".agents", "plugins", "marketplace.json"),
                     Path.Combine(execution.Runtime, "dependencies", "node", "bin", "node.exe"),
                     Path.Combine(execution.Runtime, "dependencies", "python", "python.exe"),
                     Path.Combine(execution.Runtime, "dependencies", "native", "git", "cmd", "git.exe"),
@@ -8819,7 +8622,6 @@ namespace CodexPortable
                 arguments.Add(parentStartTicks.ToString(CultureInfo.InvariantCulture));
                 arguments.Add(processId.ToString(CultureInfo.InvariantCulture));
                 arguments.Add(targetStartTicks.ToString(CultureInfo.InvariantCulture));
-                arguments.Add(layout.Root);
                 arguments.Add(familyFull);
                 arguments.Add(executionFull);
                 arguments.Add(jobName);
@@ -8962,23 +8764,22 @@ namespace CodexPortable
                 int targetId;
                 long parentStartTicks;
                 long targetStartTicks;
-                string portableRoot;
                 string family;
                 string executionRoot;
                 string jobName;
                 string rootToken;
                 if (!TryParseArguments(args, out parentId, out parentStartTicks, out targetId,
-                    out targetStartTicks, out portableRoot, out family, out executionRoot,
+                    out targetStartTicks, out family, out executionRoot,
                     out jobName, out rootToken)) return 41;
                 if (!JobRun.IsDesktopJobNameForToken(jobName, rootToken)) return 41;
-                if (!AreEventNamesValid(args, 10, 7)) return 42;
-                readyEvent = EventWaitHandle.OpenExisting(args[10]);
-                failedEvent = EventWaitHandle.OpenExisting(args[11]);
-                prepareEvent = EventWaitHandle.OpenExisting(args[12]);
-                preparedEvent = EventWaitHandle.OpenExisting(args[13]);
-                commitEvent = EventWaitHandle.OpenExisting(args[14]);
-                armedEvent = EventWaitHandle.OpenExisting(args[15]);
-                cancelEvent = EventWaitHandle.OpenExisting(args[16]);
+                if (!AreEventNamesValid(args, 9, 7)) return 42;
+                readyEvent = EventWaitHandle.OpenExisting(args[9]);
+                failedEvent = EventWaitHandle.OpenExisting(args[10]);
+                prepareEvent = EventWaitHandle.OpenExisting(args[11]);
+                preparedEvent = EventWaitHandle.OpenExisting(args[12]);
+                commitEvent = EventWaitHandle.OpenExisting(args[13]);
+                armedEvent = EventWaitHandle.OpenExisting(args[14]);
+                cancelEvent = EventWaitHandle.OpenExisting(args[15]);
                 string familyFull;
                 string executionFull;
                 if (!HostExecutionImage.TryNormalizeRecoveryTarget(family, executionRoot,
@@ -9081,34 +8882,31 @@ namespace CodexPortable
 
         private static bool TryParseArguments(string[] args, out int parentId,
             out long parentStartTicks, out int targetId, out long targetStartTicks,
-            out string portableRoot, out string family, out string executionRoot,
+            out string family, out string executionRoot,
             out string jobName, out string rootToken)
         {
             parentId = 0;
             parentStartTicks = 0;
             targetId = 0;
             targetStartTicks = 0;
-            portableRoot = null;
             family = null;
             executionRoot = null;
             jobName = null;
             rootToken = null;
-            if (args == null || args.Length != 17 || !IsWatchArgument(args[0]) ||
+            if (args == null || args.Length != 16 || !IsWatchArgument(args[0]) ||
                 !int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out parentId) ||
                 !long.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out parentStartTicks) ||
                 !int.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out targetId) ||
                 !long.TryParse(args[4], NumberStyles.None, CultureInfo.InvariantCulture, out targetStartTicks) ||
                 parentId <= 0 || targetId <= 0 || parentStartTicks <= 0 || targetStartTicks <= 0 ||
                 string.IsNullOrEmpty(args[5]) || string.IsNullOrEmpty(args[6]) ||
-                 string.IsNullOrEmpty(args[7]) || !JobRun.IsDesktopJobName(args[8]) ||
-                 !JobRun.IsRootToken(args[9])) return false;
+                 !JobRun.IsDesktopJobName(args[7]) || !JobRun.IsRootToken(args[8])) return false;
             try
             {
-                portableRoot = Path.GetFullPath(args[5]).TrimEnd('\\');
-                family = Path.GetFullPath(args[6]).TrimEnd('\\');
-                executionRoot = Path.GetFullPath(args[7]).TrimEnd('\\');
-                jobName = args[8];
-                rootToken = args[9];
+                family = Path.GetFullPath(args[5]).TrimEnd('\\');
+                executionRoot = Path.GetFullPath(args[6]).TrimEnd('\\');
+                jobName = args[7];
+                rootToken = args[8];
                 return true;
             }
             catch { return false; }
@@ -9538,19 +9336,30 @@ namespace CodexPortable
 
         internal static string FindMissingPrerequisite(PortableLayout p, bool verifyPluginCache)
         {
+            return FindMissingPrerequisite(p, null, verifyPluginCache);
+        }
+
+        internal static string FindMissingPrerequisite(PortableLayout p,
+            PortableExecutionLayout execution, bool verifyPluginCache)
+        {
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(p);
+            string runtime = execution.Runtime;
+            string tools = execution.Tools;
+            string resources = execution.Resources;
+            string primaryMarketplace = execution.PrimaryMarketplace;
             string[] files = new string[] {
-                Path.Combine(p.Runtime, "dependencies", "node", "bin", "node.exe"),
-                Path.Combine(p.Runtime, "dependencies", "python", "python.exe"),
-                Path.Combine(p.Runtime, "dependencies", "native", "git", "cmd", "git.exe"),
-                Path.Combine(p.Tools, "dotnet", "dotnet.exe"),
-                File.Exists(Path.Combine(p.Tools, "gh", "bin", "gh.exe")) ? Path.Combine(p.Tools, "gh", "bin", "gh.exe") : Path.Combine(p.Tools, "gh", "gh.exe"),
-                Path.Combine(p.Resources, "cua_node", "bin", "node_repl.exe"),
-                Path.Combine(p.Resources, "cua_node", "bin", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"),
-                Path.Combine(p.Resources, "plugins", "openai-bundled", ".agents", "plugins", "marketplace.json"),
-                Path.Combine(p.CodexHome, "offline-marketplaces", "openai-primary-runtime", ".agents", "plugins", "marketplace.json")
+                Path.Combine(runtime, "dependencies", "node", "bin", "node.exe"),
+                Path.Combine(runtime, "dependencies", "python", "python.exe"),
+                Path.Combine(runtime, "dependencies", "native", "git", "cmd", "git.exe"),
+                File.Exists(Path.Combine(tools, "gh", "bin", "gh.exe")) ? Path.Combine(tools, "gh", "bin", "gh.exe") : Path.Combine(tools, "gh", "gh.exe"),
+                Path.Combine(tools, "dotnet", "dotnet.exe"),
+                Path.Combine(resources, "cua_node", "bin", "node_repl.exe"),
+                Path.Combine(resources, "cua_node", "bin", "node_modules", "@oai", "sky", "bin", "windows", "codex-computer-use.exe"),
+                Path.Combine(resources, "plugins", "openai-bundled", ".agents", "plugins", "marketplace.json"),
+                Path.Combine(primaryMarketplace, ".agents", "plugins", "marketplace.json")
             };
             for (int i = 0; i < files.Length; i++) if (!File.Exists(files[i])) return files[i];
-            if (verifyPluginCache && !ProviderConfiguration.RequiredPluginCacheComplete(p))
+            if (verifyPluginCache && !ProviderConfiguration.RequiredPluginCacheComplete(p, execution))
                 return Path.Combine(p.CodexHome, "plugins", "cache");
             return null;
         }
@@ -9563,10 +9372,11 @@ namespace CodexPortable
         internal static Dictionary<string, string> Build(PortableLayout p,
             PortableExecutionLayout execution, string apiKey)
         {
-            string runtime = execution == null ? p.Runtime : execution.Runtime;
-            string tools = execution == null ? p.Tools : execution.Tools;
-            string resources = execution == null ? p.Resources : execution.Resources;
-            string codexExe = execution == null ? p.CodexExe : execution.CodexExe;
+            if (execution == null) execution = HostExecutionImage.GetExpectedLayout(p);
+            string runtime = execution.Runtime;
+            string tools = execution.Tools;
+            string resources = execution.Resources;
+            string codexExe = execution.CodexExe;
             Dictionary<string, string> env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             IDictionary current = Environment.GetEnvironmentVariables();
             foreach (DictionaryEntry entry in current)
@@ -9592,13 +9402,16 @@ namespace CodexPortable
             // pointing it at resources\plugins makes the app probe
             // resources\plugins\plugins and then prune the portable cache.
             Set(env, "CODEX_ELECTRON_BUNDLED_PLUGINS_RESOURCES_PATH", resources);
-            bool useHostScratch = PortableScratch.IsPrepared(p);
-            string activeTemp = useHostScratch ? p.HostTemp : p.Temp;
-            string activeXdgCache = useHostScratch ? p.HostXdgCache : p.XdgCache;
-            string activeDotnetBundle = useHostScratch ? p.HostDotnetBundle : Path.Combine(p.Profile, "dotnet", "bundle");
-            string activeNpmCache = useHostScratch ? p.HostNpmCache : Path.Combine(p.Profile, "npm");
-            string activePipCache = useHostScratch ? p.HostPipCache : Path.Combine(p.Profile, "pip");
-            string activeUvCache = useHostScratch ? p.HostUvCache : Path.Combine(p.Profile, "uv");
+            // High-churn temporary and package caches are always host-local.
+            // There is deliberately no USB fallback: a missing fixed scratch
+            // tree is a startup error, not a reason to write cache traffic to
+            // the removable volume.
+            string activeTemp = p.HostTemp;
+            string activeXdgCache = p.HostXdgCache;
+            string activeDotnetBundle = p.HostDotnetBundle;
+            string activeNpmCache = p.HostNpmCache;
+            string activePipCache = p.HostPipCache;
+            string activeUvCache = p.HostUvCache;
             Set(env, "HOME", p.Home);
             Set(env, "USERPROFILE", p.Home);
             Set(env, "HOMEDRIVE", Path.GetPathRoot(p.Home).TrimEnd('\\'));
@@ -9768,8 +9581,8 @@ namespace CodexPortable
 
         // Keep the two trusted package files open for the complete execution
         // image transaction. Inspection and extraction consume these exact
-        // streams, while FileShare.Read prevents a USB writer from changing or
-        // replacing their bytes until the transaction finishes.
+        // host-local streams, while FileShare.Read prevents an installer from
+        // changing or replacing their bytes until the transaction finishes.
         internal sealed class ExecutionImagePackageLease : IDisposable
         {
             internal readonly string CommonPackage;
@@ -10599,67 +10412,6 @@ namespace CodexPortable
             return normalized.Substring(0, separator);
         }
 
-        internal static PackageInfo StageVerifiedReleasePayload(PortableLayout layout, string package,
-            PortableArchitecture expectedArchitecture)
-        {
-            return StageVerifiedReleasePayload(layout, package, expectedArchitecture, null);
-        }
-
-        internal static PackageInfo StageVerifiedReleasePayload(PortableLayout layout, string package,
-            PortableArchitecture expectedArchitecture, Action<FirstLaunchProgress> progress)
-        {
-            if (!File.Exists(package)) throw new FileNotFoundException("MSIX not found.", package);
-            layout.EnsureDirectories();
-            string staging = Path.Combine(layout.Updates, "release-" +
-                Guid.NewGuid().ToString("N").Substring(0, 10));
-            string destination = expectedArchitecture == PortableArchitecture.X64 ?
-                Path.Combine(layout.DataRoot, "app", "current") :
-                Path.Combine(layout.Tools, "desktop-payloads", "arm64", "current");
-            try
-            {
-                if (Directory.Exists(destination) || File.Exists(destination))
-                    throw new IOException("Release payload destination already exists: " + destination);
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.ValidatingDesktopPackage));
-                string payload;
-                PackageInfo info = ExtractPreparedDesktopPayload(package, staging,
-                    expectedArchitecture, null,
-                    delegate(long completedBytes, long totalBytes, int completedFiles, int totalFiles)
-                    {
-                        if (progress != null) progress(new FirstLaunchProgress(
-                            FirstLaunchPreparationStage.ExtractingDesktopPackage,
-                            completedBytes, totalBytes, completedFiles, totalFiles));
-                    }, delegate
-                    {
-                        if (progress != null) progress(new FirstLaunchProgress(
-                            FirstLaunchPreparationStage.VerifyingAndBrandingDesktop));
-                    }, out payload);
-                // PreparePayload includes a complete ASAR postcondition after its
-                // mutations. No branded file changes between that check and the
-                // atomic directory activation below.
-                string parent = Path.GetDirectoryName(destination);
-                if (string.IsNullOrEmpty(parent)) throw new InvalidDataException("Release payload destination has no parent.");
-                Directory.CreateDirectory(parent);
-                Directory.Move(payload, destination);
-                // Directory.Move is same-volume and atomic. The source was fully
-                // verified immediately before activation, so re-reading both large
-                // EXEs and app.asar at the destination cannot add assurance here.
-                // Verify only that the activated tree contains its required anchor.
-                if (!File.Exists(Path.Combine(destination, "ChatGPT.exe")) ||
-                    !File.Exists(Path.Combine(destination, PortableBranding.DesktopExecutableName)))
-                    throw new InvalidDataException("The installed desktop payload is incomplete.");
-                if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.DesktopPayloadReady));
-                return info;
-            }
-            catch
-            {
-                if (Directory.Exists(destination)) IOUtil.DeleteDirectoryWithin(destination, layout.DataRoot);
-                throw;
-            }
-            finally
-            {
-                if (Directory.Exists(staging)) IOUtil.DeleteDirectoryWithin(staging, layout.Updates);
-            }
-        }
     }
 }
 
