@@ -40,7 +40,7 @@ src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.3
+  --version 1.4.24.5
 ```
 
 The command creates two runnable directories and matching offline archives:
@@ -62,6 +62,10 @@ whole-tree digest records.
 Windows is still required for the two checks that need real Windows GUI and
 device behavior. They are manual observations, not scripted release gates, and
 they create no checkpoint, evidence directory, receipt, or result file.
+When no volume labelled `CODEX_USB` is mounted, skip the USB deployment and
+both USB launch observations; record that omission in the delivery notes, but
+do not block the release. When the volume is mounted, the USB observations
+remain required.
 
 Run the Sandbox observation from WSL. It uses WSL interop to map the release
 read-only with networking disabled, opens the launcher and Codex Desktop, and
@@ -79,8 +83,9 @@ did not appear. Use the `LFPortable-arm64` directory instead on an ARM64 host.
 Deploy the same release to the real USB drive from WSL. The helper uses WSL
 interop for the Windows volume and process APIs, and `robocopy` copies the
 managed release files. It removes only the old expanded desktop/runtime,
-offline-marketplace, required-plugin-cache, transaction staging, and retired
-descriptor paths so the next start rebuilds them from the new offline package;
+package-owned offline-marketplace and plugin-cache catalogs discovered from the
+common ZIP and matching MSIX, transaction staging, and retired descriptor paths
+so the next start rebuilds them from the new offline package;
 configuration, SQLite, secrets, sessions, logs, and unknown user files are
 preserved.
 
@@ -108,18 +113,20 @@ these two checks.
 
 ## Publish
 
-After both real Windows observations succeed for the exact architecture package
-used on USB and in Sandbox, publish from WSL with the GitHub CLI. A stable
-release has two program assets: `LFPortable-x64.zip` and `LFPortable-arm64.zip`.
+After the required real Windows observations succeed for the exact package,
+publish from WSL with the GitHub CLI. When `CODEX_USB` is not mounted, the
+Sandbox observation is the required GUI acceptance and the USB observation is
+skipped as described above. A stable release has two program assets:
+`LFPortable-x64.zip` and `LFPortable-arm64.zip`.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.3"
-git tag -a v1.4.24.3 -m "LF Portable 1.4.24.3"
-git push origin main v1.4.24.3
+git commit -m "Release LF Portable 1.4.24.5"
+git tag -a v1.4.24.5 -m "LF Portable 1.4.24.5"
+git push origin HEAD:main refs/tags/v1.4.24.5:refs/tags/v1.4.24.5
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.3
+  --version 1.4.24.5
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

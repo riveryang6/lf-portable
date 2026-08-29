@@ -15,6 +15,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -26,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.3")]
-[assembly: AssemblyFileVersion("1.4.24.3")]
+[assembly: AssemblyVersion("1.4.24.5")]
+[assembly: AssemblyFileVersion("1.4.24.5")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -2329,7 +2330,6 @@ namespace CodexPortable
 
     internal static class AsarPortableBranding
     {
-        private const string PackagePath = "package.json";
         private const string BuildJavaScriptPrefix = ".vite/build/";
         // The desktop bundle centralizes every Windows/Store/Sparkle updater
         // decision in this environment gate. Keep the replacement the same
@@ -2340,18 +2340,13 @@ namespace CodexPortable
         private static readonly string PortableSparkleGateText =
             "p=e=>!0".PadRight(OfficialSparkleGateText.Length);
         private const string OfficialWorkerSparkleGateText =
-            "Vhe=e=>e.CODEX_SPARKLE_ENABLED===`false`";
+            "Ege=e=>e.CODEX_SPARKLE_ENABLED===`false`";
         private static readonly string PortableWorkerSparkleGateText =
-            "Hhe=e=>!0".PadRight(OfficialWorkerSparkleGateText.Length);
+            "Ege=e=>!0".PadRight(OfficialWorkerSparkleGateText.Length);
         private const string OfficialUpdateMenuHandlerText =
-            "enabled:!0,click:()=>{D5().info(`Check for updates requested via menu.`),u.checkForUpdates().then(()=>{if(u.hasUpdater())return;let e=u.getUnavailableReason()??`unknown`;D5().warning(`Desktop updater unavailable; init likely skipped.`,{safe:{reason:e},sensitive:{}}),l.dialog.showMessageBox({type:`info`,title:`Updates Unavailable`,message:`Automatic updates are unavailable right now.`,detail:`Updater initialization skipped: ${e}`})})}}";
+            "enabled:!0,click:()=>{$5().info(`Check for updates requested via menu.`),d.checkForUpdates().then(()=>{if(d.hasUpdater())return;let e=d.getUnavailableReason()??`unknown`;$5().warning(`Desktop updater unavailable; init likely skipped.`,{safe:{reason:e},sensitive:{}}),l.dialog.showMessageBox({type:`info`,title:`Updates Unavailable`,message:`Automatic updates are unavailable right now.`,detail:`Updater initialization skipped: ${e}`})})}}";
         private static readonly string PortableUpdateMenuHandlerText =
             "visible:!1,click:()=>{}}".PadRight(OfficialUpdateMenuHandlerText.Length);
-        private const string OfficialRecoveryStateText =
-            "i=Y(bMi);switch(n??i)";
-        private static readonly string PortableRecoveryStateText =
-            ("i=null;").PadRight(OfficialRecoveryStateText.Length - "switch(n??i)".Length) +
-            "switch(n??i)";
         private const string OfficialUpdaterIdleStateText =
             "updateLifecycleState=`idle`";
         private const string PortableUpdaterIdleStateText =
@@ -2363,7 +2358,7 @@ namespace CodexPortable
         // to the exact upstream implementation so an unrecognized bundle
         // fails closed instead of being partially patched.
         private const string OfficialRuntimeStaticDisabledReasonText =
-            "getStaticDisabledReason(){return this.options.hostId===`local`?this.options.sharedObjectRepository?.get(`codex_runtimes_config`)==null?`runtime-config-missing`:e0(this.options.sharedObjectRepository?.get(`statsig_default_enable_features`))?null:`feature-gate-disabled`:`not-local-host`";
+            "getStaticDisabledReason(){return this.options.hostId===`local`?this.options.sharedObjectRepository?.get(`codex_runtimes_config`)==null?`runtime-config-missing`:E0(this.options.sharedObjectRepository?.get(`statsig_default_enable_features`))?null:`feature-gate-disabled`:`not-local-host`";
         private static readonly string PortableRuntimeStaticDisabledReasonText =
             "getStaticDisabledReason(){return`portable-runtime-updates-disabled`".
                 PadRight(OfficialRuntimeStaticDisabledReasonText.Length);
@@ -2372,14 +2367,10 @@ namespace CodexPortable
         private static readonly string PortableRuntimeInstallGuardText =
             "async#e(e){throw Error(`portable-runtime-updates-disabled`)}".
                 PadRight(OfficialRuntimeInstallGuardText.Length);
-        private const string OfficialRuntimeDebugMenuGateText =
-            "T=o?(0,Q.jsx)(xt,{align:`end`,triggerButton:";
-        private const string PortableRuntimeDebugMenuGateText =
-            "T=0?(0,Q.jsx)(xt,{align:`end`,triggerButton:";
         private const string WorkspaceDependenciesSettingsFunctionText =
-            "function pr(e){return e.name===f}";
+            "function pr(e){return e.name===rt}";
         private const string OfficialWorkspaceDependenciesSettingsPanelGateText =
-            "a&&n.kind===`local`?(0,$.jsx)(dr,{hostId:t}):null";
+            "o&&n.kind===`local`?(0,$.jsx)(dr,{hostId:t}):null";
         private const string PortableWorkspaceDependenciesSettingsPanelGateText =
             "0&&n.kind===`local`?(0,$.jsx)(dr,{hostId:t}):null";
         // Codex normally collapses a config.toml permission pair into a built-in
@@ -2409,60 +2400,65 @@ namespace CodexPortable
         // without ChatGPT authentication, so both gates must keep the three
         // plugins available and let their local capability checks decide at use time.
         private const string OfficialBrowserPluginAvailabilityText =
-            "function ELr({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return a===`chrome-extension`?`window-type-disabled`:r?`loading`:t?e?n?i?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`:`browser-pane-disabled`}";
+            "function jFn({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return a===`chrome-extension`?`window-type-disabled`:r?`loading`:t?e?n?i?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`:`browser-pane-disabled`}";
         private static readonly string PortableBrowserPluginAvailabilityText =
-            "function ELr({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return`available`}".
+            "function jFn({isBrowserAgentGateEnabled:e,isBrowserEnabled:t,isBrowserUseEnabled:n,isLoading:r,runCodexInWsl:i,windowType:a}){return`available`}".
                 PadRight(OfficialBrowserPluginAvailabilityText.Length);
         private const string OfficialChromePluginAvailabilityText =
-            "function oLr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
+            "function kFn({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
         private static readonly string PortableChromePluginAvailabilityText =
-            "function oLr({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return`available`}".
+            "function kFn({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return`available`}".
                 PadRight(OfficialChromePluginAvailabilityText.Length);
         private const string OfficialComputerUsePluginAvailabilityText =
-            "function nLr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return t?o===`electron`?r?a?`loading`:i?n?`loading`:e?`available`:`config-requirement-disabled`:`unsupported-platform`:`statsig-disabled`:`window-type-disabled`:`disabled`}";
+            "function EFn({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return t?o===`electron`?r?a?`loading`:i?n?`loading`:e?`available`:`config-requirement-disabled`:`unsupported-platform`:`statsig-disabled`:`window-type-disabled`:`disabled`}";
         private static readonly string PortableComputerUsePluginAvailabilityText =
-            "function nLr({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return`available`}".
+            "function EFn({areRequiredFeaturesEnabled:e,enabled:t,isAnyFeatureLoading:n,isComputerUseGateEnabled:r,isHostCompatiblePlatform:i,isPlatformLoading:a,windowType:o}){return`available`}".
                 PadRight(OfficialComputerUsePluginAvailabilityText.Length);
         private const string OfficialBrowserPluginReconcileAvailabilityText =
-            "{...n.Os.browser,autoInstallOptOutKey:n.js(n.Os.browser.name),isAvailable:({features:e})=>e.inAppBrowserUseAllowed||e.externalBrowserUseAllowed,migrate:ks}";
+            "{...n.Gs.browser,autoInstallOptOutKey:n.Xs(n.Gs.browser.name),isAvailable:({features:e})=>e.inAppBrowserUseAllowed||e.externalBrowserUseAllowed,migrate:vne}";
         private static readonly string PortableBrowserPluginReconcileAvailabilityText =
-            "{...n.Os.browser,autoInstallOptOutKey:n.js(n.Os.browser.name),isAvailable:()=>!0,migrate:ks}".
+            "{...n.Gs.browser,autoInstallOptOutKey:n.Xs(n.Gs.browser.name),isAvailable:()=>!0,migrate:vne}".
                 PadRight(OfficialBrowserPluginReconcileAvailabilityText.Length);
         private const string OfficialChromePluginReconcileAvailabilityText =
-            "{...n.Os.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&s.f(e)}";
+            "{...n.Gs.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&s.p(e)}";
         private static readonly string PortableChromePluginReconcileAvailabilityText =
-            "{...n.Os.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:()=>!0}".
+            "{...n.Gs.chrome,syncInstallStateWithChromeExtension:!0,isAvailable:()=>!0}".
                 PadRight(OfficialChromePluginReconcileAvailabilityText.Length);
         private const string OfficialComputerUsePluginReconcileAvailabilityText =
-            "{...n.Os.computerUse,autoInstallOptOutKey:n.js(n.Os.computerUse.name),isAvailable:({features:e,platform:t})=>t===`win32`&&e.computerUse}";
+            "{...n.Gs.computerUse,autoInstallOptOutKey:n.Xs(n.Gs.computerUse.name),isAvailable:({features:e,platform:t})=>t===`win32`&&e.computerUse}";
         private static readonly string PortableComputerUsePluginReconcileAvailabilityText =
-            "{...n.Os.computerUse,autoInstallOptOutKey:n.js(n.Os.computerUse.name),isAvailable:()=>!0}".
+            "{...n.Gs.computerUse,autoInstallOptOutKey:n.Xs(n.Gs.computerUse.name),isAvailable:()=>!0}".
                 PadRight(OfficialComputerUsePluginReconcileAvailabilityText.Length);
         // The signed desktop bundle also reconciles the Sites and Deep Research
         // plugins against feature flags.  LF ships these plugins locally and
         // must keep their verified cache materialized even when the host has no
         // account-backed feature flags; otherwise the first desktop start
-        // removes two of the twelve required cache trees immediately after the
+        // removes required cache trees immediately after the
         // launcher repairs them.
         private const string OfficialSitesPluginReconcileAvailabilityText =
-            "{...n.Os.sites,autoInstallOptOutKey:n.js(n.Os.sites.name),syncToRemoteSshHosts:!0,isAvailable:({features:e})=>e.sites}";
+            "{...n.Gs.sites,autoInstallOptOutKey:n.Xs(n.Gs.sites.name),syncToRemoteSshHosts:!0,isAvailable:({features:e})=>e.sites}";
         private static readonly string PortableSitesPluginReconcileAvailabilityText =
-            "{...n.Os.sites,autoInstallOptOutKey:n.js(n.Os.sites.name),syncToRemoteSshHosts:!0,isAvailable:()=>!0}".
+            "{...n.Gs.sites,autoInstallOptOutKey:n.Xs(n.Gs.sites.name),syncToRemoteSshHosts:!0,isAvailable:()=>!0}".
                 PadRight(OfficialSitesPluginReconcileAvailabilityText.Length);
         private const string OfficialDeepResearchPluginReconcileAvailabilityText =
-            "{...n.Os.deepResearch,isAvailable:({features:e})=>e.deepResearch}";
+            "{...n.Gs.deepResearch,isAvailable:({features:e})=>e.deepResearch}";
         private static readonly string PortableDeepResearchPluginReconcileAvailabilityText =
-            "{...n.Os.deepResearch,isAvailable:()=>!0}".
+            "{...n.Gs.deepResearch,isAvailable:()=>!0}".
                 PadRight(OfficialDeepResearchPluginReconcileAvailabilityText.Length);
-        private const string OfficialSunsetUpdateGateText = "if(hx(`2929582856`)){";
+        private const string OfficialSunsetUpdateGateText = "if(UD(`2929582856`)){";
         private static readonly string PortableSunsetUpdateGateText =
             "if(!1".PadRight(OfficialSunsetUpdateGateText.Length - 2) + "){";
-        private const string OfficialBrandText = "\"codexAppBrand\": \"chatgpt\"";
-        private const string PortableBrandText = "\"codexAppBrand\": \"codex\"  ";
+        // The current bundle resolves the Linux/package brand default in the
+        // shared build module instead of exposing codexAppBrand in package.json.
+        private const string OfficialBrandText =
+            "codexAppBrand:n.Ml().trim().pipe(n.Tl(`chatgpt`))";
+        private static readonly string PortableBrandText =
+            "codexAppBrand:n.Ml().trim().pipe(n.Tl(`codex  `))".
+                PadRight(OfficialBrandText.Length);
         private const string OfficialAumidText = "Prod:return`com.openai.codex`";
         private const string PortableAumidText = "Prod:return`OpenAI.Codex.USB`";
         private const string OfficialPortableUserDataResolverText =
-            "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(i)return(0,o.resolve)(i);let a=(0,o.join)(e,t.Fa(n)),s=r.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,o.join)(a,`agent`,s):a}";
+            "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(i)return(0,o.resolve)(i);let a=t.La(n),s=(0,o.join)(e,a==null?`Codex`:`Codex (${a})`),c=r.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&c!=null?(0,o.join)(s,`agent`,c):s}";
         private static readonly string PortableUserDataResolverText =
             "function ee({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();return i&&r.CODEX_PORTABLE_ROOT?(0,o.resolve)(i):(a.dialog.showErrorBox(`LF Portable`,`Open CodexPortable.exe from the USB drive.`),process.exit(1))}".
                 PadRight(OfficialPortableUserDataResolverText.Length);
@@ -2478,18 +2474,18 @@ namespace CodexPortable
         private const string PortableWindowsLastWindowText =
             "o.app.on(`window-all-closed`,()=>{process.platform===`win32`";
         private const string OfficialWindowsWindowIconSelectorText =
-            "M=process.platform===`linux`?y5(i,e,E):null";
+            "M=process.platform===`linux`?G5(t,T):j()";
         private const string PortableWindowsWindowIconSelectorText =
-            "M=process.platform===`win32`?y5(i,e,E):null";
+            "M=process.platform===`win32`?G5(t,T):j()";
         private const string OfficialWindowsWindowIconResolverText =
-            "function y5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${fS(e,t)}.png`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,r);if((0,_.existsSync)(e))return e}let i=(0,p.join)(n,r);return(0,_.existsSync)(i)?i:null}";
+            "function G5(e,t=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let n=`${wS(e)}.png`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,n);if((0,_.existsSync)(e))return e}let r=(0,p.join)(t,n);return(0,_.existsSync)(r)?r:null}";
         private static readonly string PortableWindowsWindowIconResolverText =
-            "function y5(e,t,n=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let r=`${iS(e,t)}.ico`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,r);if((0,_.existsSync)(e))return e}let i=(0,p.join)(n,r);return(0,_.existsSync)(i)?i:null}";
+            "function G5(e,t=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let n=`${wS(e)}.ico`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,n);if((0,_.existsSync)(e))return e}let r=(0,p.join)(t,n);return(0,_.existsSync)(r)?r:null}";
         private const string WebviewAssetPrefix = "webview/assets/";
         private const string AppInitialAssetStem = "app-initial";
         private const string OnboardingPageAssetStem = "onboarding-page";
         private const string OfficialStandardOnboardingGateText =
-            "shouldShowStandardOnboarding:_";
+            "shouldShowStandardOnboarding:y";
         private const string PortableStandardOnboardingGateText =
             "shouldShowStandardOnboarding:0";
         // The model-upgrade surface is independent of the standard onboarding
@@ -2498,23 +2494,23 @@ namespace CodexPortable
         // cannot reintroduce the initial "Try model" CTA while unrelated NUX
         // surfaces keep their normal behavior.
         private const string OfficialTryModelAvailabilityGateText =
-            "function jdl(){let e=(0,Ndl.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=fss();if(!r||t==null)return null;";
+            "function Tcc(){let e=(0,Dcc.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=x_a();if(!r||t==null)return null;";
         private const string PortableTryModelAvailabilityGateText =
-            "function jdl(){let e=(0,Ndl.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=fss();if(!0||t==null)return null;";
+            "function Tcc(){let e=(0,Dcc.c)(3),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=x_a();if(!0||t==null)return null;";
         private const string OfficialTryModelUpgradeGateText =
-            "function Mdl(){let e=(0,Ndl.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=pss(),[i,a]=so(vss),{serviceTierSettings:o}=UX(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Gsl(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Pdl.useEffect)(f,p),!d||t==null||c==null)return null;";
+            "function Ecc(){let e=(0,Dcc.c)(10),t=A_($),{announcementContent:n,dismissAnnouncement:r,showAnnouncement:i}=S_a(),a=Z(Fcc)??wb(Ncc,!1),{serviceTierSettings:o}=jq(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Aoc(!a&&i&&n!=null&&!s),d=!a&&i&&n!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==a||e[1]!==s||e[2]!==t?(f=()=>{!s||a||t.set(Fcc,!0)},p=[a,s,t],e[0]=a,e[1]=s,e[2]=t,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Occ.useEffect)(f,p),!d||n==null||c==null)return null;";
         private const string PortableTryModelUpgradeGateText =
-            "function Mdl(){let e=(0,Ndl.c)(10),{announcementContent:t,dismissAnnouncement:n,showAnnouncement:r}=pss(),[i,a]=so(vss),{serviceTierSettings:o}=UX(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Gsl(!i&&r&&t!=null&&!s),d=!i&&r&&t!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==i||e[1]!==s||e[2]!==a?(f=()=>{!s||i||a(!0)},p=[i,s,a],e[0]=i,e[1]=s,e[2]=a,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Pdl.useEffect)(f,p),!0||t==null||c==null)return null;";
+            "function Ecc(){let e=(0,Dcc.c)(10),t=A_($),{announcementContent:n,dismissAnnouncement:r,showAnnouncement:i}=S_a(),a=Z(Fcc)??wb(Ncc,!1),{serviceTierSettings:o}=jq(),s=o.selectedServiceTier!=null,{estimate:c,estimateStatus:l,isEstimateFreshForAnnouncement:u}=Aoc(!a&&i&&n!=null&&!s),d=!a&&i&&n!=null&&l===`ready`&&c!=null&&u,f,p;if(e[0]!==a||e[1]!==s||e[2]!==t?(f=()=>{!s||a||t.set(Fcc,!0)},p=[a,s,t],e[0]=a,e[1]=s,e[2]=t,e[3]=f,e[4]=p):(f=e[3],p=e[4]),(0,Occ.useEffect)(f,p),!0||n==null||c==null)return null;";
         private const string OnboardingMessageIdPrefix =
             "electron.onboarding.conversationalOnboarding.";
         private const string OfficialOnboardingBrandText = "ChatGPT";
         private const string PortableOnboardingBrandText = "Codex";
         private const string OfficialOnboardingHeaderIconText =
-            "p=c?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(uz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
+            "p=c?(0,c9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,c9.jsx)(tU,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
         private const string PortableOnboardingHeaderIconText =
-            "p=0?(0,d9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,d9.jsx)(uz,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
+            "p=0?(0,c9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,c9.jsx)(tU,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
         private const string OfficialWindowsSandboxSetupPendingGateText =
-            "isWindowsSandboxSetupPending:fr!=null&&pt";
+            "isWindowsSandboxSetupPending:Sr!=null&&Ct";
         private static readonly string PortableWindowsSandboxSetupPendingGateText =
             "isWindowsSandboxSetupPending:!1".
                 PadRight(OfficialWindowsSandboxSetupPendingGateText.Length);
@@ -2524,14 +2520,14 @@ namespace CodexPortable
         // the derived composer state so the configured Codex permissions remain
         // authoritative without introducing a UAC or fixed-disk prerequisite.
         private const string OfficialWindowsSandboxComposerStateText =
-            "vr=fr!=null&&(pr||_r!=null||mt.isEnabled&&pt)";
+            "Or=Sr!=null&&(Cr||Dr!=null||wt.isEnabled&&Ct)";
         private static readonly string PortableWindowsSandboxComposerStateText =
-            "vr=(hr=!1,gr=!1,_r=null,!1)".
+            "Or=!1".
                 PadRight(OfficialWindowsSandboxComposerStateText.Length);
         private const string OfficialWindowsSandboxFinalStepText =
-            "function $s(e,t){return e.finalStep.shouldShow&&!t?Z.WindowsSandboxSetup:Z.Complete}";
+            "function hc(e,t){return e.finalStep.shouldShow&&!t?X.WindowsSandboxSetup:X.Complete}";
         private static readonly string PortableWindowsSandboxFinalStepText =
-            "function $s(e,t){return Z.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
+            "function hc(e,t){return X.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
         private const int OnboardingBrandPaddingLength = 2;
         private const int ExpectedOnboardingLocaleEntries = 65;
         private const int ExpectedTranslatedOnboardingLocaleEntries = 64;
@@ -2576,9 +2572,25 @@ namespace CodexPortable
             internal int BrandOffset;
         }
 
+        private sealed class IdentifierPattern
+        {
+            internal Regex Regex;
+            internal readonly Dictionary<string, string> Groups =
+                new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        private static readonly object IdentifierPatternCacheLock = new object();
+        private static readonly Dictionary<string, IdentifierPattern> IdentifierPatternCache =
+            new Dictionary<string, IdentifierPattern>(StringComparer.Ordinal);
+
         private sealed class AsarArchive : IDisposable
         {
             internal readonly FileStream Stream;
+            private readonly string OriginalPath;
+            private readonly string WorkingPath;
+            private readonly bool Writable;
+            private bool committed;
+            private bool disposed;
             internal readonly long DataOffset;
             internal readonly int HeaderJsonLength;
             internal string HeaderJson;
@@ -2588,7 +2600,21 @@ namespace CodexPortable
 
             internal AsarArchive(string path, bool writable)
             {
-                Stream = new FileStream(path, FileMode.Open, writable ? FileAccess.ReadWrite : FileAccess.Read,
+                OriginalPath = path;
+                Writable = writable;
+                if (writable)
+                {
+                    string directory = Path.GetDirectoryName(path);
+                    if (string.IsNullOrEmpty(directory))
+                        throw new InvalidDataException("Electron ASAR path has no parent directory.");
+                    WorkingPath = Path.Combine(directory, "." + Path.GetFileName(path) + "." +
+                        Guid.NewGuid().ToString("N") + ".tmp");
+                    File.Copy(path, WorkingPath, false);
+                    File.SetAttributes(WorkingPath, FileAttributes.Normal);
+                }
+                else WorkingPath = path;
+                Stream = new FileStream(WorkingPath, FileMode.Open,
+                    writable ? FileAccess.ReadWrite : FileAccess.Read,
                     FileShare.Read, 1024 * 1024, FileOptions.RandomAccess);
                 byte[] prefix = new byte[16];
                 ReadExact(Stream, prefix, 0, prefix.Length);
@@ -2768,9 +2794,22 @@ namespace CodexPortable
                 IntegrityReplacements.Clear();
             }
 
+            internal void Commit()
+            {
+                if (!Writable || committed) return;
+                FlushHeader();
+                Stream.Flush(true);
+                Stream.Dispose();
+                IOUtil.AtomicReplaceFile(WorkingPath, OriginalPath);
+                committed = true;
+            }
+
             public void Dispose()
             {
+                if (disposed) return;
+                disposed = true;
                 Stream.Dispose();
+                if (Writable && !committed) IOUtil.TryDelete(WorkingPath);
             }
         }
 
@@ -2795,10 +2834,7 @@ namespace CodexPortable
                 VerifyArchiveJavaScriptPatternState(archive, OfficialConfigModeOptionLabelText,
                     PortableConfigModeOptionLabelText, ConfigModeOptionLabelExpectedOccurrences,
                     "Electron config.toml permission option-label state is invalid.");
-                int brandEntries = EnsurePattern(archive, archive.FindRequiredEntry(PackagePath),
-                    OfficialBrandText, PortableBrandText);
-                if (brandEntries != 1) throw new InvalidDataException("Electron package brand metadata is ambiguous.");
-
+                int brandEntries = 0;
                 int aumidEntries = 0;
                 int portableUserDataResolverEntries = 0;
                 int closeToTrayEntries = 0;
@@ -2808,11 +2844,9 @@ namespace CodexPortable
                 int sparkleGateEntries = 0;
                 int workerSparkleGateEntries = 0;
                 int updateMenuEntries = 0;
-                int recoveryEntries = 0;
                 int updaterIdleStateEntries = 0;
                 int runtimeStaticDisabledReasonEntries = 0;
                 int runtimeInstallGuardEntries = 0;
-                int runtimeDebugMenuGateEntries = 0;
                 int workspaceDependenciesSettingsPanelGateEntries = 0;
                 int configModeEquivalenceEntries = 0;
                 int configModeShortLabelEntries = 0;
@@ -2834,14 +2868,14 @@ namespace CodexPortable
                     AsarEntry entry = archive.Entries[i];
                     if (entry.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
                     {
+                        brandEntries += EnsurePattern(archive, entry, OfficialBrandText, PortableBrandText,
+                            1, true);
                         sparkleGateEntries += EnsurePattern(archive, entry,
-                            OfficialSparkleGateText, PortableSparkleGateText);
+                            OfficialSparkleGateText, PortableSparkleGateText, 1, true);
                         workerSparkleGateEntries += EnsurePattern(archive, entry,
-                            OfficialWorkerSparkleGateText, PortableWorkerSparkleGateText);
+                            OfficialWorkerSparkleGateText, PortableWorkerSparkleGateText, 1, true);
                         updateMenuEntries += EnsurePattern(archive, entry,
                             OfficialUpdateMenuHandlerText, PortableUpdateMenuHandlerText);
-                        recoveryEntries += EnsurePattern(archive, entry,
-                            OfficialRecoveryStateText, PortableRecoveryStateText);
                         updaterIdleStateEntries += EnsurePattern(archive, entry,
                             OfficialUpdaterIdleStateText, PortableUpdaterIdleStateText);
                         runtimeStaticDisabledReasonEntries += EnsurePattern(archive, entry,
@@ -2849,8 +2883,6 @@ namespace CodexPortable
                             PortableRuntimeStaticDisabledReasonText);
                         runtimeInstallGuardEntries += EnsurePattern(archive, entry,
                             OfficialRuntimeInstallGuardText, PortableRuntimeInstallGuardText);
-                        runtimeDebugMenuGateEntries += EnsurePattern(archive, entry,
-                            OfficialRuntimeDebugMenuGateText, PortableRuntimeDebugMenuGateText);
                         workspaceDependenciesSettingsPanelGateEntries += EnsurePattern(archive, entry,
                             OfficialWorkspaceDependenciesSettingsPanelGateText,
                             PortableWorkspaceDependenciesSettingsPanelGateText);
@@ -2865,39 +2897,39 @@ namespace CodexPortable
                             ConfigModeOptionLabelExpectedOccurrences);
                         browserPluginAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialBrowserPluginAvailabilityText,
-                            PortableBrowserPluginAvailabilityText);
+                            PortableBrowserPluginAvailabilityText, 1, true);
                         chromePluginAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialChromePluginAvailabilityText,
-                            PortableChromePluginAvailabilityText);
+                            PortableChromePluginAvailabilityText, 1, true);
                         computerUsePluginAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialComputerUsePluginAvailabilityText,
-                            PortableComputerUsePluginAvailabilityText);
+                            PortableComputerUsePluginAvailabilityText, 1, true);
                         browserPluginReconcileAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialBrowserPluginReconcileAvailabilityText,
-                            PortableBrowserPluginReconcileAvailabilityText);
+                            PortableBrowserPluginReconcileAvailabilityText, 1, true);
                         chromePluginReconcileAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialChromePluginReconcileAvailabilityText,
-                            PortableChromePluginReconcileAvailabilityText);
+                            PortableChromePluginReconcileAvailabilityText, 1, true);
                         computerUsePluginReconcileAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialComputerUsePluginReconcileAvailabilityText,
-                            PortableComputerUsePluginReconcileAvailabilityText);
+                            PortableComputerUsePluginReconcileAvailabilityText, 1, true);
                         sitesPluginReconcileAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialSitesPluginReconcileAvailabilityText,
-                            PortableSitesPluginReconcileAvailabilityText);
+                            PortableSitesPluginReconcileAvailabilityText, 1, true);
                         deepResearchPluginReconcileAvailabilityEntries += EnsurePattern(archive, entry,
                             OfficialDeepResearchPluginReconcileAvailabilityText,
-                            PortableDeepResearchPluginReconcileAvailabilityText);
+                            PortableDeepResearchPluginReconcileAvailabilityText, 1, true);
                         sunsetUpdateGateEntries += EnsurePattern(archive, entry,
-                            OfficialSunsetUpdateGateText, PortableSunsetUpdateGateText);
+                            OfficialSunsetUpdateGateText, PortableSunsetUpdateGateText, 1, true);
                         tryModelAvailabilityGateEntries += EnsurePattern(archive, entry,
                             OfficialTryModelAvailabilityGateText,
-                            PortableTryModelAvailabilityGateText);
+                            PortableTryModelAvailabilityGateText, 1, true);
                         tryModelUpgradeGateEntries += EnsurePattern(archive, entry,
                             OfficialTryModelUpgradeGateText,
-                            PortableTryModelUpgradeGateText);
+                            PortableTryModelUpgradeGateText, 1, true);
                         windowsSandboxComposerStateEntries += EnsurePattern(archive, entry,
                             OfficialWindowsSandboxComposerStateText,
-                            PortableWindowsSandboxComposerStateText);
+                            PortableWindowsSandboxComposerStateText, 1, true);
                         portableUserDataResolverEntries += EnsurePattern(archive, entry,
                             OfficialPortableUserDataResolverText,
                             PortableUserDataResolverText);
@@ -2914,6 +2946,8 @@ namespace CodexPortable
                         OfficialWindowsWindowIconResolverText, PortableWindowsWindowIconResolverText);
                 }
                 if (aumidEntries == 0) throw new InvalidDataException("Electron portable AppUserModelID target is missing.");
+                if (brandEntries != 1)
+                    throw new InvalidDataException("Electron package brand target is missing or ambiguous.");
                 if (portableUserDataResolverEntries != 1)
                     throw new InvalidDataException(
                         "Electron portable user-data routing guard is missing or ambiguous.");
@@ -2928,16 +2962,11 @@ namespace CodexPortable
                     throw new InvalidDataException("Electron updater gate is missing or ambiguous.");
                 if (updateMenuEntries != 1)
                     throw new InvalidDataException("Electron updater menu target is missing or ambiguous.");
-                if (recoveryEntries != 1)
-                    throw new InvalidDataException("Electron updater recovery target is missing or ambiguous.");
                 if (updaterIdleStateEntries != 1)
                     throw new InvalidDataException("Electron updater lifecycle target is missing or ambiguous.");
                 if (runtimeStaticDisabledReasonEntries != 1 || runtimeInstallGuardEntries != 1)
                     throw new InvalidDataException(
                         "Electron workspace runtime updater target is missing or ambiguous.");
-                if (runtimeDebugMenuGateEntries != 1)
-                    throw new InvalidDataException(
-                        "Electron workspace runtime debug-menu target is missing or ambiguous.");
                 if (workspaceDependenciesSettingsFunctionEntries != 1 ||
                     workspaceDependenciesSettingsPanelGateEntries != 1)
                     throw new InvalidDataException(
@@ -2973,11 +3002,12 @@ namespace CodexPortable
                 EnsureOnboardingHeaderIconEntry(archive, onboardingHeaderIcon);
                 if (EnsurePattern(archive, onboardingHeaderIcon,
                         OfficialWindowsSandboxSetupPendingGateText,
-                        PortableWindowsSandboxSetupPendingGateText) != 1)
+                        PortableWindowsSandboxSetupPendingGateText, 1, true) != 1)
                     throw new InvalidDataException(
                         "Electron Windows-sandbox setup-pending gate is missing or ambiguous: " +
                         onboardingHeaderIcon.Path);
                 archive.FlushHeader();
+                archive.Commit();
             }
             if (!IsPrepared(asarPath)) throw new InvalidDataException("Electron portable branding verification failed.");
         }
@@ -2993,12 +3023,8 @@ namespace CodexPortable
             {
                 using (AsarArchive archive = new AsarArchive(asarPath, false))
                 {
-                    AsarEntry package = archive.FindRequiredEntry(PackagePath);
-                    byte[] packageBytes = archive.ReadEntry(package);
-                    if (CountPattern(packageBytes, Encoding.UTF8.GetBytes(OfficialBrandText)) != 0 ||
-                        CountPattern(packageBytes, Encoding.UTF8.GetBytes(PortableBrandText)) != 1 ||
-                        !IntegrityMatches(package, ComputeIntegrity(packageBytes, package.BlockSize))) return false;
-
+                    byte[] officialBrand = Encoding.UTF8.GetBytes(OfficialBrandText);
+                    byte[] portableBrand = Encoding.UTF8.GetBytes(PortableBrandText);
                     byte[] officialAumid = Encoding.UTF8.GetBytes(OfficialAumidText);
                     byte[] portableAumid = Encoding.UTF8.GetBytes(PortableAumidText);
                     byte[] officialPortableUserDataResolver =
@@ -3092,8 +3118,6 @@ namespace CodexPortable
                     byte[] portableWorkerSparkleGate = Encoding.UTF8.GetBytes(PortableWorkerSparkleGateText);
                     byte[] officialUpdateMenu = Encoding.UTF8.GetBytes(OfficialUpdateMenuHandlerText);
                     byte[] portableUpdateMenu = Encoding.UTF8.GetBytes(PortableUpdateMenuHandlerText);
-                    byte[] officialRecovery = Encoding.UTF8.GetBytes(OfficialRecoveryStateText);
-                    byte[] portableRecovery = Encoding.UTF8.GetBytes(PortableRecoveryStateText);
                     byte[] officialUpdaterIdleState = Encoding.UTF8.GetBytes(OfficialUpdaterIdleStateText);
                     byte[] portableUpdaterIdleState = Encoding.UTF8.GetBytes(PortableUpdaterIdleStateText);
                     byte[] officialRuntimeStaticDisabledReason =
@@ -3104,10 +3128,6 @@ namespace CodexPortable
                         Encoding.UTF8.GetBytes(OfficialRuntimeInstallGuardText);
                     byte[] portableRuntimeInstallGuard =
                         Encoding.UTF8.GetBytes(PortableRuntimeInstallGuardText);
-                    byte[] officialRuntimeDebugMenuGate =
-                        Encoding.UTF8.GetBytes(OfficialRuntimeDebugMenuGateText);
-                    byte[] portableRuntimeDebugMenuGate =
-                        Encoding.UTF8.GetBytes(PortableRuntimeDebugMenuGateText);
                     byte[] workspaceDependenciesSettingsFunction =
                         Encoding.UTF8.GetBytes(WorkspaceDependenciesSettingsFunctionText);
                     byte[] officialWorkspaceDependenciesSettingsPanelGate =
@@ -3138,26 +3158,6 @@ namespace CodexPortable
                         Encoding.UTF8.GetBytes(OfficialComputerUsePluginAvailabilityText);
                     byte[] portableComputerUsePluginAvailability =
                         Encoding.UTF8.GetBytes(PortableComputerUsePluginAvailabilityText);
-                    byte[] officialBrowserPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(OfficialBrowserPluginReconcileAvailabilityText);
-                    byte[] portableBrowserPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(PortableBrowserPluginReconcileAvailabilityText);
-                    byte[] officialChromePluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(OfficialChromePluginReconcileAvailabilityText);
-                    byte[] portableChromePluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(PortableChromePluginReconcileAvailabilityText);
-                    byte[] officialComputerUsePluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(OfficialComputerUsePluginReconcileAvailabilityText);
-                    byte[] portableComputerUsePluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(PortableComputerUsePluginReconcileAvailabilityText);
-                    byte[] officialSitesPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(OfficialSitesPluginReconcileAvailabilityText);
-                    byte[] portableSitesPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(PortableSitesPluginReconcileAvailabilityText);
-                    byte[] officialDeepResearchPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(OfficialDeepResearchPluginReconcileAvailabilityText);
-                    byte[] portableDeepResearchPluginReconcileAvailability =
-                        Encoding.UTF8.GetBytes(PortableDeepResearchPluginReconcileAvailabilityText);
                     byte[] officialSunsetUpdateGate =
                         Encoding.UTF8.GetBytes(OfficialSunsetUpdateGateText);
                     byte[] portableSunsetUpdateGate =
@@ -3177,11 +3177,10 @@ namespace CodexPortable
                     int portableSparkleGateOccurrences = 0;
                     int portableWorkerSparkleGateOccurrences = 0;
                     int portableUpdateMenuOccurrences = 0;
-                    int portableRecoveryOccurrences = 0;
+                    int portableBrandOccurrences = 0;
                     int portableUpdaterIdleStateOccurrences = 0;
                     int portableRuntimeStaticDisabledReasonOccurrences = 0;
                     int portableRuntimeInstallGuardOccurrences = 0;
-                    int portableRuntimeDebugMenuGateOccurrences = 0;
                     int workspaceDependenciesSettingsFunctionOccurrences = 0;
                     int officialWorkspaceDependenciesSettingsPanelGateOccurrences = 0;
                     int portableWorkspaceDependenciesSettingsPanelGateOccurrences = 0;
@@ -3205,14 +3204,18 @@ namespace CodexPortable
                         AsarEntry entry = archive.Entries[i];
                         if (!entry.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase)) continue;
                         byte[] bytes = archive.ReadEntry(entry);
-                        int officialSparkleGateCount = CountPattern(bytes, officialSparkleGate);
-                        int portableSparkleGateCount = CountPattern(bytes, portableSparkleGate);
-                        int officialWorkerSparkleGateCount = CountPattern(bytes, officialWorkerSparkleGate);
-                        int portableWorkerSparkleGateCount = CountPattern(bytes, portableWorkerSparkleGate);
+                        int officialBrandCount = CountIdentifierPattern(bytes, OfficialBrandText, entry);
+                        int portableBrandCount = CountIdentifierPattern(bytes, PortableBrandText, entry);
+                        int officialSparkleGateCount = CountIdentifierPattern(bytes,
+                            OfficialSparkleGateText, entry);
+                        int portableSparkleGateCount = CountIdentifierPattern(bytes,
+                            PortableSparkleGateText, entry);
+                        int officialWorkerSparkleGateCount = CountIdentifierPattern(bytes,
+                            OfficialWorkerSparkleGateText, entry);
+                        int portableWorkerSparkleGateCount = CountIdentifierPattern(bytes,
+                            PortableWorkerSparkleGateText, entry);
                         int officialUpdateMenuCount = CountPattern(bytes, officialUpdateMenu);
                         int portableUpdateMenuCount = CountPattern(bytes, portableUpdateMenu);
-                        int officialRecoveryCount = CountPattern(bytes, officialRecovery);
-                        int portableRecoveryCount = CountPattern(bytes, portableRecovery);
                         int officialUpdaterIdleStateCount = CountPattern(bytes, officialUpdaterIdleState);
                         int portableUpdaterIdleStateCount = CountPattern(bytes, portableUpdaterIdleState);
                         int officialRuntimeStaticDisabledReasonCount =
@@ -3223,10 +3226,6 @@ namespace CodexPortable
                             CountPattern(bytes, officialRuntimeInstallGuard);
                         int portableRuntimeInstallGuardCount =
                             CountPattern(bytes, portableRuntimeInstallGuard);
-                        int officialRuntimeDebugMenuGateCount =
-                            CountPattern(bytes, officialRuntimeDebugMenuGate);
-                        int portableRuntimeDebugMenuGateCount =
-                            CountPattern(bytes, portableRuntimeDebugMenuGate);
                         int workspaceDependenciesSettingsFunctionCount =
                             CountPattern(bytes, workspaceDependenciesSettingsFunction);
                         int officialWorkspaceDependenciesSettingsPanelGateCount =
@@ -3246,57 +3245,68 @@ namespace CodexPortable
                         int portableConfigModeOptionLabelCount =
                             CountPattern(bytes, portableConfigModeOptionLabel);
                         int officialBrowserPluginAvailabilityCount =
-                            CountPattern(bytes, officialBrowserPluginAvailability);
+                            CountIdentifierPattern(bytes, OfficialBrowserPluginAvailabilityText, entry);
                         int portableBrowserPluginAvailabilityCount =
-                            CountPattern(bytes, portableBrowserPluginAvailability);
+                            CountIdentifierPattern(bytes, PortableBrowserPluginAvailabilityText, entry);
                         int officialChromePluginAvailabilityCount =
-                            CountPattern(bytes, officialChromePluginAvailability);
+                            CountIdentifierPattern(bytes, OfficialChromePluginAvailabilityText, entry);
                         int portableChromePluginAvailabilityCount =
-                            CountPattern(bytes, portableChromePluginAvailability);
+                            CountIdentifierPattern(bytes, PortableChromePluginAvailabilityText, entry);
                         int officialComputerUsePluginAvailabilityCount =
-                            CountPattern(bytes, officialComputerUsePluginAvailability);
+                            CountIdentifierPattern(bytes, OfficialComputerUsePluginAvailabilityText, entry);
                         int portableComputerUsePluginAvailabilityCount =
-                            CountPattern(bytes, portableComputerUsePluginAvailability);
+                            CountIdentifierPattern(bytes, PortableComputerUsePluginAvailabilityText, entry);
                         int officialBrowserPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, officialBrowserPluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                OfficialBrowserPluginReconcileAvailabilityText, entry);
                         int portableBrowserPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, portableBrowserPluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                PortableBrowserPluginReconcileAvailabilityText, entry);
                         int officialChromePluginReconcileAvailabilityCount =
-                            CountPattern(bytes, officialChromePluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                OfficialChromePluginReconcileAvailabilityText, entry);
                         int portableChromePluginReconcileAvailabilityCount =
-                            CountPattern(bytes, portableChromePluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                PortableChromePluginReconcileAvailabilityText, entry);
                         int officialComputerUsePluginReconcileAvailabilityCount =
-                            CountPattern(bytes, officialComputerUsePluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                OfficialComputerUsePluginReconcileAvailabilityText, entry);
                         int portableComputerUsePluginReconcileAvailabilityCount =
-                            CountPattern(bytes, portableComputerUsePluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                PortableComputerUsePluginReconcileAvailabilityText, entry);
                         int officialSitesPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, officialSitesPluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                OfficialSitesPluginReconcileAvailabilityText, entry);
                         int portableSitesPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, portableSitesPluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                PortableSitesPluginReconcileAvailabilityText, entry);
                         int officialDeepResearchPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, officialDeepResearchPluginReconcileAvailability);
+                            CountIdentifierPattern(bytes,
+                                OfficialDeepResearchPluginReconcileAvailabilityText, entry);
                         int portableDeepResearchPluginReconcileAvailabilityCount =
-                            CountPattern(bytes, portableDeepResearchPluginReconcileAvailability);
-                        int officialSunsetUpdateGateCount = CountPattern(bytes, officialSunsetUpdateGate);
-                        int portableSunsetUpdateGateCount = CountPattern(bytes, portableSunsetUpdateGate);
+                            CountIdentifierPattern(bytes,
+                                PortableDeepResearchPluginReconcileAvailabilityText, entry);
+                        int officialSunsetUpdateGateCount = CountIdentifierPattern(bytes,
+                            OfficialSunsetUpdateGateText, entry);
+                        int portableSunsetUpdateGateCount = CountIdentifierPattern(bytes,
+                            PortableSunsetUpdateGateText, entry);
                         int officialTryModelAvailabilityGateCount =
-                            CountPattern(bytes, officialTryModelAvailabilityGate);
+                            CountIdentifierPattern(bytes, OfficialTryModelAvailabilityGateText, entry);
                         int portableTryModelAvailabilityGateCount =
-                            CountPattern(bytes, portableTryModelAvailabilityGate);
+                            CountIdentifierPattern(bytes, PortableTryModelAvailabilityGateText, entry);
                         int officialTryModelUpgradeGateCount =
-                            CountPattern(bytes, officialTryModelUpgradeGate);
+                            CountIdentifierPattern(bytes, OfficialTryModelUpgradeGateText, entry);
                         int portableTryModelUpgradeGateCount =
-                            CountPattern(bytes, portableTryModelUpgradeGate);
+                            CountIdentifierPattern(bytes, PortableTryModelUpgradeGateText, entry);
                         int officialWindowsSandboxComposerStateCount =
-                            CountPattern(bytes, officialWindowsSandboxComposerState);
+                            CountIdentifierPattern(bytes, OfficialWindowsSandboxComposerStateText, entry);
                         int portableWindowsSandboxComposerStateCount =
-                            CountPattern(bytes, portableWindowsSandboxComposerState);
-                        if (officialSparkleGateCount != 0 || officialWorkerSparkleGateCount != 0 ||
-                            officialUpdateMenuCount != 0 || officialRecoveryCount != 0 ||
+                            CountIdentifierPattern(bytes, PortableWindowsSandboxComposerStateText, entry);
+                        if (officialBrandCount != 0 || officialSparkleGateCount != 0 || officialWorkerSparkleGateCount != 0 ||
+                            officialUpdateMenuCount != 0 ||
                             officialUpdaterIdleStateCount != 0 ||
                             officialRuntimeStaticDisabledReasonCount != 0 ||
                             officialRuntimeInstallGuardCount != 0 ||
-                            officialRuntimeDebugMenuGateCount != 0 ||
                             officialConfigModeEquivalenceCount != 0 ||
                             officialConfigModeShortLabelCount != 0 ||
                             officialConfigModeOptionLabelCount != 0 ||
@@ -3312,12 +3322,11 @@ namespace CodexPortable
                             officialTryModelAvailabilityGateCount != 0 ||
                             officialTryModelUpgradeGateCount != 0 ||
                             officialWindowsSandboxComposerStateCount != 0 ||
-                            portableSparkleGateCount > 1 || portableWorkerSparkleGateCount > 1 ||
-                            portableUpdateMenuCount > 1 || portableRecoveryCount > 1 ||
+                            portableBrandCount > 1 || portableSparkleGateCount > 1 || portableWorkerSparkleGateCount > 1 ||
+                            portableUpdateMenuCount > 1 ||
                             portableUpdaterIdleStateCount > 1 ||
                             portableRuntimeStaticDisabledReasonCount > 1 ||
                             portableRuntimeInstallGuardCount > 1 ||
-                            portableRuntimeDebugMenuGateCount > 1 ||
                             workspaceDependenciesSettingsFunctionCount > 1 ||
                             officialWorkspaceDependenciesSettingsPanelGateCount > 1 ||
                             portableWorkspaceDependenciesSettingsPanelGateCount > 1 ||
@@ -3336,12 +3345,11 @@ namespace CodexPortable
                             portableTryModelAvailabilityGateCount > 1 ||
                             portableTryModelUpgradeGateCount > 1 ||
                             portableWindowsSandboxComposerStateCount > 1) return false;
-                        if (portableSparkleGateCount == 0 && portableWorkerSparkleGateCount == 0 &&
-                            portableUpdateMenuCount == 0 && portableRecoveryCount == 0 &&
+                        if (portableBrandCount == 0 && portableSparkleGateCount == 0 && portableWorkerSparkleGateCount == 0 &&
+                            portableUpdateMenuCount == 0 &&
                             portableUpdaterIdleStateCount == 0 &&
                             portableRuntimeStaticDisabledReasonCount == 0 &&
                             portableRuntimeInstallGuardCount == 0 &&
-                            portableRuntimeDebugMenuGateCount == 0 &&
                             workspaceDependenciesSettingsFunctionCount == 0 &&
                             officialWorkspaceDependenciesSettingsPanelGateCount == 0 &&
                             portableWorkspaceDependenciesSettingsPanelGateCount == 0 &&
@@ -3361,15 +3369,14 @@ namespace CodexPortable
                             portableTryModelUpgradeGateCount == 0 &&
                             portableWindowsSandboxComposerStateCount == 0) continue;
                         if (!IntegrityMatches(entry, ComputeIntegrity(bytes, entry.BlockSize))) return false;
+                        portableBrandOccurrences += portableBrandCount;
                         portableSparkleGateOccurrences += portableSparkleGateCount;
                         portableWorkerSparkleGateOccurrences += portableWorkerSparkleGateCount;
                         portableUpdateMenuOccurrences += portableUpdateMenuCount;
-                        portableRecoveryOccurrences += portableRecoveryCount;
                         portableUpdaterIdleStateOccurrences += portableUpdaterIdleStateCount;
                         portableRuntimeStaticDisabledReasonOccurrences +=
                             portableRuntimeStaticDisabledReasonCount;
                         portableRuntimeInstallGuardOccurrences += portableRuntimeInstallGuardCount;
-                        portableRuntimeDebugMenuGateOccurrences += portableRuntimeDebugMenuGateCount;
                         workspaceDependenciesSettingsFunctionOccurrences +=
                             workspaceDependenciesSettingsFunctionCount;
                         officialWorkspaceDependenciesSettingsPanelGateOccurrences +=
@@ -3406,14 +3413,12 @@ namespace CodexPortable
                         portableWindowsSandboxComposerStateOccurrences +=
                             portableWindowsSandboxComposerStateCount;
                     }
-                    if (portableSparkleGateOccurrences != 1 ||
+                    if (portableBrandOccurrences != 1 || portableSparkleGateOccurrences != 1 ||
                         portableWorkerSparkleGateOccurrences != 1 ||
                         portableUpdateMenuOccurrences != 1 ||
-                        portableRecoveryOccurrences != 1 ||
                         portableUpdaterIdleStateOccurrences != 1 ||
                         portableRuntimeStaticDisabledReasonOccurrences != 1 ||
                         portableRuntimeInstallGuardOccurrences != 1 ||
-                        portableRuntimeDebugMenuGateOccurrences != 1 ||
                         portableConfigModeEquivalenceOccurrences != 1 ||
                         portableConfigModeShortLabelOccurrences != ConfigModeShortLabelExpectedOccurrences ||
                         portableConfigModeOptionLabelOccurrences != ConfigModeOptionLabelExpectedOccurrences ||
@@ -3441,16 +3446,18 @@ namespace CodexPortable
                         OnboardingEntryTarget target = onboardingEntries[i];
                         byte[] bytes = archive.ReadEntry(target.Entry);
                         List<OnboardingLiteralTarget> literals = AnalyzeOnboardingEntry(bytes, target);
-                        officialStandardOnboardingOccurrences += CountPattern(bytes,
-                            Encoding.UTF8.GetBytes(OfficialStandardOnboardingGateText));
-                        portableStandardOnboardingOccurrences += CountPattern(bytes,
-                            Encoding.UTF8.GetBytes(PortableStandardOnboardingGateText));
+                        officialStandardOnboardingOccurrences += CountIdentifierPattern(bytes,
+                            OfficialStandardOnboardingGateText, target.Entry);
+                        portableStandardOnboardingOccurrences += CountIdentifierPattern(bytes,
+                            PortableStandardOnboardingGateText, target.Entry);
                         if (!literals[0].IsPortable || !literals[1].IsPortable ||
                             !IntegrityMatches(target.Entry,
                                 ComputeIntegrity(bytes, target.Entry.BlockSize))) return false;
                         if (target.ContainsDefaultMessages &&
-                            (CountPattern(bytes, Encoding.UTF8.GetBytes(OfficialWindowsSandboxFinalStepText)) != 0 ||
-                             CountPattern(bytes, Encoding.UTF8.GetBytes(PortableWindowsSandboxFinalStepText)) != 1))
+                            (CountIdentifierPattern(bytes, OfficialWindowsSandboxFinalStepText,
+                                 target.Entry) != 0 ||
+                             CountIdentifierPattern(bytes, PortableWindowsSandboxFinalStepText,
+                                 target.Entry) != 1))
                             return false;
                     }
                     if (officialStandardOnboardingOccurrences != 0 ||
@@ -3459,10 +3466,10 @@ namespace CodexPortable
                     AsarEntry onboardingHeaderIcon = FindOnboardingHeaderIconEntry(archive);
                     byte[] onboardingHeaderIconBytes = archive.ReadEntry(onboardingHeaderIcon);
                     if (!HasOnboardingHeaderIconState(onboardingHeaderIconBytes, true) ||
-                        CountPattern(onboardingHeaderIconBytes,
-                            Encoding.UTF8.GetBytes(OfficialWindowsSandboxSetupPendingGateText)) != 0 ||
-                        CountPattern(onboardingHeaderIconBytes,
-                            Encoding.UTF8.GetBytes(PortableWindowsSandboxSetupPendingGateText)) != 1 ||
+                        CountIdentifierPattern(onboardingHeaderIconBytes,
+                            OfficialWindowsSandboxSetupPendingGateText, onboardingHeaderIcon) != 0 ||
+                        CountIdentifierPattern(onboardingHeaderIconBytes,
+                            PortableWindowsSandboxSetupPendingGateText, onboardingHeaderIcon) != 1 ||
                         !IntegrityMatches(onboardingHeaderIcon,
                             ComputeIntegrity(onboardingHeaderIconBytes,
                                 onboardingHeaderIcon.BlockSize))) return false;
@@ -3602,7 +3609,7 @@ namespace CodexPortable
         {
             if (target.ContainsDefaultMessages &&
                 EnsurePattern(archive, target.Entry, OfficialWindowsSandboxFinalStepText,
-                    PortableWindowsSandboxFinalStepText) != 1)
+                    PortableWindowsSandboxFinalStepText, 1, true) != 1)
                 throw new InvalidDataException(
                     "Electron Windows-sandbox onboarding final-step target is missing or ambiguous: " +
                     target.Entry.Path);
@@ -3618,8 +3625,10 @@ namespace CodexPortable
             byte[] portableGate = Encoding.UTF8.GetBytes(PortableStandardOnboardingGateText);
             if (officialGate.Length != portableGate.Length)
                 throw new InvalidDataException("Electron onboarding gate replacement must preserve entry length.");
-            int officialGateCount = CountPattern(currentBytes, officialGate);
-            int portableGateCount = CountPattern(currentBytes, portableGate);
+            int officialGateCount = CountIdentifierPattern(currentBytes,
+                OfficialStandardOnboardingGateText, target.Entry);
+            int portableGateCount = CountIdentifierPattern(currentBytes,
+                PortableStandardOnboardingGateText, target.Entry);
             bool gateIsPortable = portableGateCount == 1;
             if (target.ContainsDefaultMessages)
             {
@@ -3649,7 +3658,8 @@ namespace CodexPortable
 
             byte[] portableBytes = (byte[])legacyPortableBytes.Clone();
             if (target.ContainsDefaultMessages)
-                ReplacePattern(portableBytes, officialGate, portableGate);
+                portableBytes = RewriteIdentifierPattern(portableBytes,
+                    OfficialStandardOnboardingGateText, PortableStandardOnboardingGateText);
 
             ValidateOnboardingState(originalBytes, target, false);
             ValidateOnboardingState(legacyPortableBytes, target, true);
@@ -3683,10 +3693,9 @@ namespace CodexPortable
 
         private static bool HasStandardOnboardingGateState(byte[] bytes, bool portable)
         {
-            byte[] official = Encoding.UTF8.GetBytes(OfficialStandardOnboardingGateText);
-            byte[] patched = Encoding.UTF8.GetBytes(PortableStandardOnboardingGateText);
-            return portable ? CountPattern(bytes, official) == 0 && CountPattern(bytes, patched) == 1 :
-                CountPattern(bytes, official) == 1 && CountPattern(bytes, patched) == 0;
+            int official = CountIdentifierPattern(bytes, OfficialStandardOnboardingGateText, null);
+            int patched = CountIdentifierPattern(bytes, PortableStandardOnboardingGateText, null);
+            return portable ? official == 0 && patched == 1 : official == 1 && patched == 0;
         }
 
         private static List<OnboardingLiteralTarget> AnalyzeOnboardingEntry(byte[] bytes,
@@ -3935,7 +3944,7 @@ namespace CodexPortable
         }
 
         private static int EnsurePattern(AsarArchive archive, AsarEntry entry, string officialText,
-            string portableText, int maximumOccurrences = 1)
+            string portableText, int maximumOccurrences = 1, bool allowIdentifierFallback = false)
         {
             // Multiple fixed-length patches may share one ASAR entry.  Flush
             // pending integrity replacements before reading it so each patch
@@ -3950,7 +3959,11 @@ namespace CodexPortable
             byte[] bytes = archive.ReadEntry(entry);
             int officialCount = CountPattern(bytes, official);
             int portableCount = CountPattern(bytes, portable);
-            if (officialCount == 0 && portableCount == 0) return 0;
+            if (officialCount == 0 && portableCount == 0)
+            {
+                return allowIdentifierFallback ? EnsureIdentifierPatternFallback(archive, entry, bytes,
+                    officialText, portableText, maximumOccurrences) : 0;
+            }
             if (officialCount > maximumOccurrences || portableCount > maximumOccurrences)
                 throw new InvalidDataException("Electron ASAR patch target is ambiguous: " + entry.Path);
             if (officialCount != 0 && portableCount != 0)
@@ -3982,6 +3995,360 @@ namespace CodexPortable
                 archive.AddIntegrityReplacement(entry, current);
             }
             return officialCount != 0 ? officialCount : portableCount;
+        }
+
+        private static int EnsureIdentifierPatternFallback(AsarArchive archive, AsarEntry entry,
+            byte[] bytes, string officialText, string portableText, int maximumOccurrences)
+        {
+            if (!IsIdentifierFallbackPathAllowed(entry, officialText)) return 0;
+            UTF8Encoding utf8 = new UTF8Encoding(false, true);
+            string text = utf8.GetString(bytes);
+            IdentifierPattern officialPattern = BuildIdentifierPattern(officialText);
+            MatchCollection officialMatches = officialPattern.Regex.Matches(text);
+            IdentifierPattern portablePattern = BuildIdentifierPattern(portableText);
+            MatchCollection portableMatches = portablePattern.Regex.Matches(text);
+            int portableCount = portableMatches.Count;
+            if (officialMatches.Count == 0 && portableCount == 0) return 0;
+            if (officialMatches.Count > maximumOccurrences || portableCount > maximumOccurrences)
+                throw new InvalidDataException("Electron ASAR semantic patch target is ambiguous: " + entry.Path);
+            if (officialMatches.Count != 0 && portableCount != 0)
+                throw new InvalidDataException("Electron ASAR semantic patch state is mixed: " + entry.Path);
+
+            IntegrityState current = ComputeIntegrity(bytes, entry.BlockSize);
+            if (officialMatches.Count != 0)
+            {
+                byte[] patched = RewriteIdentifierMatches(text, bytes.Length, officialMatches,
+                    officialPattern, portableText, utf8);
+                IntegrityState patchedIntegrity = ComputeIntegrity(patched, entry.BlockSize);
+                if (IntegrityMatches(entry, current))
+                {
+                    archive.WriteEntry(entry, patched);
+                    archive.AddIntegrityReplacement(entry, patchedIntegrity);
+                }
+                else if (IntegrityMatches(entry, patchedIntegrity)) archive.WriteEntry(entry, patched);
+                else throw new InvalidDataException(
+                    "Electron ASAR semantic target failed integrity verification: " + entry.Path);
+                return officialMatches.Count;
+            }
+
+            if (!IntegrityMatches(entry, current))
+            {
+                byte[] restored = RewriteIdentifierMatches(text, bytes.Length, portableMatches,
+                    portablePattern, officialText, utf8);
+                IntegrityState original = ComputeIntegrity(restored, entry.BlockSize);
+                if (!IntegrityMatches(entry, original))
+                    throw new InvalidDataException(
+                        "Electron ASAR semantic target contains unrecognized changes: " + entry.Path);
+                archive.AddIntegrityReplacement(entry, current);
+            }
+            return portableCount;
+        }
+
+        private static bool IsIdentifierFallbackPathAllowed(AsarEntry entry, string officialText)
+        {
+            string path = entry.Path ?? "";
+            if (string.Equals(officialText, OfficialBrandText, StringComparison.Ordinal))
+                return path.IndexOf(".vite/build/window-all-closed", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.Equals(officialText, OfficialSparkleGateText, StringComparison.Ordinal))
+                return path.IndexOf(".vite/build/file-based-logger", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.Equals(officialText, OfficialWorkerSparkleGateText, StringComparison.Ordinal))
+                return path.EndsWith(".vite/build/worker.js", StringComparison.OrdinalIgnoreCase);
+            if (string.Equals(officialText, OfficialSunsetUpdateGateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialTryModelAvailabilityGateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialTryModelUpgradeGateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialWindowsSandboxSetupPendingGateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialWindowsSandboxComposerStateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialBrowserPluginAvailabilityText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialChromePluginAvailabilityText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialComputerUsePluginAvailabilityText, StringComparison.Ordinal))
+                return path.IndexOf("app-initial", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.Equals(officialText, OfficialBrowserPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialChromePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialComputerUsePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialSitesPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialDeepResearchPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return path.StartsWith(BuildJavaScriptPrefix + "main-",
+                    StringComparison.OrdinalIgnoreCase) &&
+                    path.EndsWith(".js", StringComparison.OrdinalIgnoreCase);
+            if (string.Equals(officialText, OfficialStandardOnboardingGateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialWindowsSandboxFinalStepText, StringComparison.Ordinal))
+                return path.IndexOf("onboarding-page", StringComparison.OrdinalIgnoreCase) >= 0;
+            return false;
+        }
+
+        private static byte[] RewriteIdentifierMatches(string text, int expectedByteLength,
+            MatchCollection matches, IdentifierPattern sourcePattern, string replacementTemplate,
+            UTF8Encoding utf8)
+        {
+            StringBuilder rewritten = new StringBuilder(text);
+            for (int i = matches.Count - 1; i >= 0; i--)
+            {
+                Match match = matches[i];
+                // Carry the aliases captured from the actual bundle into the
+                // replacement.  The minifier may rename a function or its
+                // parameters between desktop releases; using the constants'
+                // old aliases would leave a syntactically valid but broken
+                // declaration.
+                string replacement = RenderIdentifierTemplate(replacementTemplate,
+                    sourcePattern, match);
+                if (replacement.Length > match.Length)
+                    throw new InvalidDataException(
+                        "Electron ASAR semantic replacement exceeds its target.");
+                replacement = replacement.PadRight(match.Length);
+                rewritten.Remove(match.Index, match.Length);
+                rewritten.Insert(match.Index, replacement);
+            }
+            byte[] result = utf8.GetBytes(rewritten.ToString());
+            if (result.Length != expectedByteLength)
+                throw new InvalidDataException(
+                    "Electron ASAR semantic replacement changed entry length.");
+            return result;
+        }
+
+        private static IdentifierPattern BuildIdentifierPattern(string template)
+        {
+            lock (IdentifierPatternCacheLock)
+            {
+                IdentifierPattern cached;
+                if (IdentifierPatternCache.TryGetValue(template, out cached)) return cached;
+            }
+            IdentifierPattern result = new IdentifierPattern();
+            StringBuilder pattern = new StringBuilder();
+            string source = template.TrimEnd(' ');
+            char quote = '\0';
+            bool escaped = false;
+            for (int i = 0; i < source.Length; )
+            {
+                char value = source[i];
+                if (quote != '\0')
+                {
+                    pattern.Append(Regex.Escape(value.ToString()));
+                    if (escaped) escaped = false;
+                    else if (value == '\\') escaped = true;
+                    else if (value == quote) quote = '\0';
+                    i++;
+                    continue;
+                }
+                if (value == '\'' || value == '"' || value == '`')
+                {
+                    quote = value;
+                    pattern.Append(Regex.Escape(value.ToString()));
+                    i++;
+                    continue;
+                }
+                if (!IsJavaScriptIdentifierStart(value))
+                {
+                    pattern.Append(Regex.Escape(value.ToString()));
+                    i++;
+                    continue;
+                }
+
+                int start = i++;
+                while (i < source.Length && IsJavaScriptIdentifierPart(source[i])) i++;
+                string identifier = source.Substring(start, i - start);
+                if (!IsVolatileJavaScriptIdentifier(identifier))
+                {
+                    pattern.Append(Regex.Escape(identifier));
+                    continue;
+                }
+                string group;
+                if (!result.Groups.TryGetValue(identifier, out group))
+                {
+                    group = "v" + result.Groups.Count.ToString(CultureInfo.InvariantCulture);
+                    result.Groups.Add(identifier, group);
+                    pattern.Append("(?<![A-Za-z0-9_$])(?<").Append(group).
+                        Append(">[A-Za-z_$][A-Za-z0-9_$]*)(?![A-Za-z0-9_$])");
+                }
+                else
+                {
+                    pattern.Append("(?<![A-Za-z0-9_$])\\k<").Append(group).
+                        Append(">(?![A-Za-z0-9_$])");
+                }
+            }
+            pattern.Append(" *");
+            result.Regex = new Regex(pattern.ToString(),
+                RegexOptions.CultureInvariant | RegexOptions.Compiled);
+            lock (IdentifierPatternCacheLock)
+            {
+                IdentifierPattern cached;
+                if (IdentifierPatternCache.TryGetValue(template, out cached)) return cached;
+                IdentifierPatternCache.Add(template, result);
+            }
+            return result;
+        }
+
+        private static string RenderIdentifierTemplate(string template, IdentifierPattern sourcePattern,
+            Match sourceMatch)
+        {
+            StringBuilder result = new StringBuilder();
+            string source = template.TrimEnd(' ');
+            char quote = '\0';
+            bool escaped = false;
+            for (int i = 0; i < source.Length; )
+            {
+                char value = source[i];
+                if (quote != '\0')
+                {
+                    result.Append(value);
+                    if (escaped) escaped = false;
+                    else if (value == '\\') escaped = true;
+                    else if (value == quote) quote = '\0';
+                    i++;
+                    continue;
+                }
+                if (value == '\'' || value == '"' || value == '`')
+                {
+                    quote = value;
+                    result.Append(value);
+                    i++;
+                    continue;
+                }
+                if (!IsJavaScriptIdentifierStart(value))
+                {
+                    result.Append(value);
+                    i++;
+                    continue;
+                }
+                int start = i++;
+                while (i < source.Length && IsJavaScriptIdentifierPart(source[i])) i++;
+                string identifier = source.Substring(start, i - start);
+                string group;
+                if (IsVolatileJavaScriptIdentifier(identifier) &&
+                          sourcePattern.Groups.TryGetValue(identifier, out group) &&
+                          sourceMatch.Groups[group].Success)
+                    result.Append(sourceMatch.Groups[group].Value);
+                else result.Append(identifier);
+            }
+            return result.ToString();
+        }
+
+        private static bool IsJavaScriptIdentifierStart(char value)
+        {
+            return value == '$' || value == '_' ||
+                value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z';
+        }
+
+        private static bool IsJavaScriptIdentifierPart(char value)
+        {
+            return IsJavaScriptIdentifierStart(value) || value >= '0' && value <= '9';
+        }
+
+        private static bool IsVolatileJavaScriptIdentifier(string value)
+        {
+            if (value.Length > 3) return false;
+            switch (value)
+            {
+                case "as": case "do": case "for": case "get": case "if": case "in":
+                case "let": case "new": case "of": case "set": case "try": case "var":
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        private static byte[] RewriteIdentifierPattern(byte[] bytes, string officialText,
+            string portableText)
+        {
+            byte[] official = Encoding.UTF8.GetBytes(officialText);
+            byte[] portable = Encoding.UTF8.GetBytes(portableText);
+            if (CountPattern(bytes, official) == 1)
+            {
+                byte[] exactResult = (byte[])bytes.Clone();
+                ReplacePattern(exactResult, official, portable);
+                return exactResult;
+            }
+            UTF8Encoding utf8 = new UTF8Encoding(false, true);
+            string text = utf8.GetString(bytes);
+            IdentifierPattern pattern = BuildIdentifierPattern(officialText);
+            MatchCollection matches = pattern.Regex.Matches(text);
+            if (matches.Count != 1)
+                throw new InvalidDataException(
+                    "Electron ASAR semantic replacement target is missing or ambiguous.");
+            return RewriteIdentifierMatches(text, bytes.Length, matches, pattern, portableText, utf8);
+        }
+
+        private static int CountIdentifierPattern(byte[] bytes, string exactText, AsarEntry entry)
+        {
+            byte[] exact = Encoding.UTF8.GetBytes(exactText);
+            int count = CountPattern(bytes, exact);
+            if (count != 0) return count;
+            string officialText = GetIdentifierFallbackOfficialText(exactText);
+            if (officialText == null || entry != null &&
+                !IsIdentifierFallbackPathAllowed(entry, officialText)) return 0;
+            string text = new UTF8Encoding(false, true).GetString(bytes);
+            return BuildIdentifierPattern(exactText).Regex.Matches(text).Count;
+        }
+
+        private static string GetIdentifierFallbackOfficialText(string text)
+        {
+            if (string.Equals(text, OfficialBrandText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableBrandText, StringComparison.Ordinal)) return OfficialBrandText;
+            if (string.Equals(text, OfficialSparkleGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableSparkleGateText, StringComparison.Ordinal)) return OfficialSparkleGateText;
+            if (string.Equals(text, OfficialWorkerSparkleGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableWorkerSparkleGateText, StringComparison.Ordinal))
+                return OfficialWorkerSparkleGateText;
+            if (string.Equals(text, OfficialSunsetUpdateGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableSunsetUpdateGateText, StringComparison.Ordinal))
+                return OfficialSunsetUpdateGateText;
+            if (string.Equals(text, OfficialTryModelAvailabilityGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableTryModelAvailabilityGateText, StringComparison.Ordinal))
+                return OfficialTryModelAvailabilityGateText;
+            if (string.Equals(text, OfficialTryModelUpgradeGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableTryModelUpgradeGateText, StringComparison.Ordinal))
+                return OfficialTryModelUpgradeGateText;
+            if (string.Equals(text, OfficialWindowsSandboxComposerStateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableWindowsSandboxComposerStateText, StringComparison.Ordinal))
+                return OfficialWindowsSandboxComposerStateText;
+            if (string.Equals(text, OfficialWindowsSandboxSetupPendingGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableWindowsSandboxSetupPendingGateText, StringComparison.Ordinal))
+                return OfficialWindowsSandboxSetupPendingGateText;
+            if (string.Equals(text, OfficialWindowsSandboxFinalStepText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableWindowsSandboxFinalStepText, StringComparison.Ordinal))
+                return OfficialWindowsSandboxFinalStepText;
+            if (string.Equals(text, OfficialStandardOnboardingGateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableStandardOnboardingGateText, StringComparison.Ordinal))
+                return OfficialStandardOnboardingGateText;
+            if (string.Equals(text, OfficialBrowserPluginAvailabilityText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableBrowserPluginAvailabilityText, StringComparison.Ordinal))
+                return OfficialBrowserPluginAvailabilityText;
+            if (string.Equals(text, OfficialChromePluginAvailabilityText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableChromePluginAvailabilityText, StringComparison.Ordinal))
+                return OfficialChromePluginAvailabilityText;
+            if (string.Equals(text, OfficialComputerUsePluginAvailabilityText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableComputerUsePluginAvailabilityText, StringComparison.Ordinal))
+                return OfficialComputerUsePluginAvailabilityText;
+            if (string.Equals(text, OfficialBrowserPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(text, PortableBrowserPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return OfficialBrowserPluginReconcileAvailabilityText;
+            if (string.Equals(text, OfficialChromePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(text, PortableChromePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return OfficialChromePluginReconcileAvailabilityText;
+            if (string.Equals(text, OfficialComputerUsePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(text, PortableComputerUsePluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return OfficialComputerUsePluginReconcileAvailabilityText;
+            if (string.Equals(text, OfficialSitesPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(text, PortableSitesPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return OfficialSitesPluginReconcileAvailabilityText;
+            if (string.Equals(text, OfficialDeepResearchPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal) ||
+                string.Equals(text, PortableDeepResearchPluginReconcileAvailabilityText,
+                    StringComparison.Ordinal))
+                return OfficialDeepResearchPluginReconcileAvailabilityText;
+            return null;
         }
 
         private static IntegrityState ComputeIntegrity(byte[] bytes, int blockSize)
@@ -5503,7 +5870,7 @@ namespace CodexPortable
                 text.AppendLine("ConfigAnalyticsDisabled=" + (analyticsSection >= 0 &&
                     config.IndexOf("enabled = false", analyticsSection, StringComparison.OrdinalIgnoreCase) >= 0).ToString(CultureInfo.InvariantCulture));
                 text.AppendLine("ConfiguredPluginCount=" + ProviderConfiguration.CountConfiguredPlugins(
-                    config, layout.Architecture).ToString(CultureInfo.InvariantCulture));
+                    config, layout).ToString(CultureInfo.InvariantCulture));
             }
             text.AppendLine("DefaultApprovalPolicy=" + ProviderConfiguration.DefaultApprovalPolicy);
             text.AppendLine("DefaultSandboxMode=" + ProviderConfiguration.DefaultSandboxMode);
@@ -6846,10 +7213,12 @@ namespace CodexPortable
         private const string UnconfiguredBaseUrl = "https://invalid.invalid/v1";
         private const string SecretExcludes = "[\"OPENAI_API_KEY\", \"CODEX_API_KEY\", \"CODEX_PORTABLE_API_KEY\", \"OPENAI_BASE_URL\", \"CODEX_APP_SERVER_OPENAI_BASE_URL\", \"ANTHROPIC_API_KEY\", \"AZURE_OPENAI_API_KEY\", \"AWS_ACCESS_KEY_ID\", \"AWS_SECRET_ACCESS_KEY\", \"AWS_SESSION_TOKEN\", \"GITHUB_TOKEN\", \"GH_TOKEN\"]";
         private static readonly string[] X64BundledPluginNames = new string[] {
-            "sites", "browser", "chrome", "computer-use", "codex-app-tools", "latex", "deep-research", "visualize"
+            "sites", "browser", "chrome", "computer-use", "codex-app-tools", "latex", "deep-research",
+            "unified-computer-use", "user-writing", "visualize"
         };
         private static readonly string[] Arm64BundledPluginNames = new string[] {
-            "sites", "browser", "chrome", "computer-use", "codex-app-tools", "deep-research", "visualize"
+            "sites", "browser", "chrome", "computer-use", "codex-app-tools", "deep-research",
+            "unified-computer-use", "user-writing", "visualize"
         };
         private static readonly string[] PrimaryRuntimePluginNames = new string[] {
             "documents", "pdf", "presentations", "spreadsheets", "template-creator"
@@ -6896,9 +7265,100 @@ namespace CodexPortable
             return (string[])SelectRequiredPlugins(architecture).Clone();
         }
 
+        // The desktop payload is extracted after the first config write. Keep
+        // the architecture lists above as the pre-extraction fallback, then
+        // use the signed payload's actual marketplace inventory on subsequent
+        // writes so new official plugins do not require a launcher patch.
+        internal static string[] GetRequiredPlugins(PortableLayout layout)
+        {
+            if (layout == null) throw new ArgumentNullException("layout");
+            if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture))
+                return (string[])NoRequiredPlugins.Clone();
+            return BuildRequiredPlugins(GetBundledPluginNames(layout));
+        }
+
         internal static string[] GetRequiredBundledPluginNames(PortableArchitecture architecture)
         {
             return (string[])SelectRequiredBundledPluginNames(architecture).Clone();
+        }
+
+        internal static string[] GetBundledPluginNames(PortableLayout layout)
+        {
+            if (layout == null) throw new ArgumentNullException("layout");
+            string pluginsRoot = Path.Combine(layout.Resources, "plugins",
+                "openai-bundled", "plugins");
+            if (File.Exists(layout.OfficialAppExe))
+                return DiscoverBundledPluginNames(pluginsRoot);
+            return GetRequiredBundledPluginNames(layout.Architecture);
+        }
+
+        // This is intentionally fail-closed for an already extracted payload.
+        // Config generation uses the Try* wrapper above so a missing directory
+        // during first launch still falls back to the architecture defaults.
+        internal static string[] DiscoverBundledPluginNames(string pluginsRoot)
+        {
+            string[] discovered;
+            if (!TryDiscoverBundledPluginNames(pluginsRoot, out discovered))
+                throw new InvalidDataException("Official bundled-plugin inventory is missing or invalid: " + pluginsRoot);
+            return discovered;
+        }
+
+        private static bool TryDiscoverBundledPluginNames(string pluginsRoot, out string[] names)
+        {
+            names = null;
+            try
+            {
+                if (string.IsNullOrEmpty(pluginsRoot) || !Directory.Exists(pluginsRoot) ||
+                    (File.GetAttributes(pluginsRoot) & FileAttributes.ReparsePoint) != 0) return false;
+                string[] entries = Directory.GetFileSystemEntries(pluginsRoot, "*",
+                    SearchOption.TopDirectoryOnly);
+                if (entries.Length == 0) return false;
+                List<string> discovered = new List<string>(entries.Length);
+                HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < entries.Length; i++)
+                {
+                    FileAttributes attributes = File.GetAttributes(entries[i]);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                        (attributes & FileAttributes.Directory) == 0) return false;
+                    string pluginName = Path.GetFileName(entries[i]);
+                    if (!IsSafePluginName(pluginName) || !seen.Add(pluginName)) return false;
+
+                    string metadataDirectory = Path.Combine(entries[i], ".codex-plugin");
+                    string manifest = Path.Combine(metadataDirectory, "plugin.json");
+                    if (!Directory.Exists(metadataDirectory) ||
+                        (File.GetAttributes(metadataDirectory) & FileAttributes.ReparsePoint) != 0 ||
+                        !File.Exists(manifest) ||
+                        (File.GetAttributes(manifest) & FileAttributes.ReparsePoint) != 0)
+                        return false;
+                    string manifestName;
+                    string version;
+                    PluginCacheRecovery.ReadManifestIdentity(manifest, out manifestName, out version);
+                    if (!string.Equals(manifestName, pluginName, StringComparison.Ordinal) ||
+                        string.IsNullOrWhiteSpace(version)) return false;
+                    discovered.Add(pluginName);
+                }
+                discovered.Sort(StringComparer.Ordinal);
+                names = discovered.ToArray();
+                return true;
+            }
+            catch
+            {
+                names = null;
+                return false;
+            }
+        }
+
+        private static bool IsSafePluginName(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value == "." || value == ".." || value.Length > 128)
+                return false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')) return false;
+            }
+            return true;
         }
 
         internal static bool TryNormalizeBaseUrl(string input, out string normalized)
@@ -7163,7 +7623,7 @@ namespace CodexPortable
                 }
             }
             catch { }
-            string[] requiredPlugins = GetRequiredPlugins(layout.Architecture);
+            string[] requiredPlugins = GetRequiredPlugins(layout);
             string bundledMarketplace = Path.Combine(layout.Resources, "plugins", "openai-bundled");
             string primaryMarketplace = Path.Combine(layout.CodexHome, "offline-marketplaces", "openai-primary-runtime");
             StringBuilder text = new StringBuilder();
@@ -7227,6 +7687,15 @@ namespace CodexPortable
             return count;
         }
 
+        internal static int CountConfiguredPlugins(string config, PortableLayout layout)
+        {
+            string[] requiredPlugins = GetRequiredPlugins(layout);
+            int count = 0;
+            for (int i = 0; i < requiredPlugins.Length; i++)
+                if (config.IndexOf("[plugins.\"" + requiredPlugins[i] + "\"]", StringComparison.OrdinalIgnoreCase) >= 0) count++;
+            return count;
+        }
+
         internal static int RequiredPluginCount(PortableArchitecture architecture)
         {
             return GetRequiredPlugins(architecture).Length;
@@ -7238,14 +7707,14 @@ namespace CodexPortable
                 throw new InvalidDataException("No official plugin cache can be repaired for architecture: " +
                     ArchitectureInfo.NameOf(layout.Architecture));
             return PluginCacheRecovery.EnsureRequiredPlugins(layout,
-                GetRequiredPlugins(layout.Architecture));
+                GetRequiredPlugins(layout));
         }
 
         internal static bool RequiredPluginCacheComplete(PortableLayout layout)
         {
             if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture)) return false;
             return PluginCacheRecovery.RequiredPluginCacheComplete(layout,
-                GetRequiredPlugins(layout.Architecture));
+                GetRequiredPlugins(layout));
         }
 
         private static string EscapeToml(string value)
@@ -7413,6 +7882,7 @@ namespace CodexPortable
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "node", "bin"));
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "python"));
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "python", "Scripts"));
+            AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "native", "powershell"));
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "native", "git", "cmd"));
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "native", "git", "bin"));
             AddDirectory(portablePath, Path.Combine(runtime, "dependencies", "git", "cmd"));
@@ -7979,58 +8449,14 @@ namespace CodexPortable
             using (FileStream stream = File.OpenRead(manifestPath))
                 actual = ParseAndValidateManifest(stream, expectedArchitecture);
             if (!actual.Version.Equals(expected.Version)) throw new InvalidDataException("Extracted manifest version changed.");
-            ValidateOfficialBundledPlugins(staging, expectedArchitecture);
+            ValidateOfficialBundledPlugins(staging);
         }
 
-        private static void ValidateOfficialBundledPlugins(string payloadRoot,
-            PortableArchitecture expectedArchitecture)
+        private static void ValidateOfficialBundledPlugins(string payloadRoot)
         {
             string pluginsRoot = Path.Combine(payloadRoot, "resources", "plugins",
                 "openai-bundled", "plugins");
-            if (!Directory.Exists(pluginsRoot))
-                throw new DirectoryNotFoundException("Official bundled-plugin root is missing: " + pluginsRoot);
-
-            string[] expectedNames =
-                ProviderConfiguration.GetRequiredBundledPluginNames(expectedArchitecture);
-            HashSet<string> expected = new HashSet<string>(StringComparer.Ordinal);
-            for (int i = 0; i < expectedNames.Length; i++)
-            {
-                if (string.IsNullOrEmpty(expectedNames[i]) || !expected.Add(expectedNames[i]))
-                    throw new InvalidDataException("Official bundled-plugin contract is invalid.");
-            }
-
-            string[] entries = Directory.GetFileSystemEntries(pluginsRoot, "*",
-                SearchOption.TopDirectoryOnly);
-            if (entries.Length != expected.Count)
-                throw new InvalidDataException("Official bundled-plugin inventory does not match the " +
-                    ArchitectureInfo.NameOf(expectedArchitecture) + " contract.");
-
-            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
-            for (int i = 0; i < entries.Length; i++)
-            {
-                FileAttributes attributes = File.GetAttributes(entries[i]);
-                if ((attributes & FileAttributes.ReparsePoint) != 0 ||
-                    (attributes & FileAttributes.Directory) == 0)
-                    throw new InvalidDataException(
-                        "Official bundled-plugin root contains a non-directory or reparse entry.");
-                string pluginName = Path.GetFileName(entries[i]);
-                if (string.IsNullOrEmpty(pluginName) || !expected.Contains(pluginName) ||
-                    !seen.Add(pluginName))
-                    throw new InvalidDataException("Official bundled-plugin inventory contains an unexpected entry: " +
-                        pluginName);
-
-                string manifest = Path.Combine(entries[i], ".codex-plugin", "plugin.json");
-                string manifestName;
-                string version;
-                PluginCacheRecovery.ReadManifestIdentity(manifest, out manifestName, out version);
-                if (!string.Equals(manifestName, pluginName, StringComparison.Ordinal) ||
-                    string.IsNullOrWhiteSpace(version))
-                    throw new InvalidDataException("Official bundled-plugin manifest identity is invalid: " +
-                        pluginName);
-            }
-
-            if (seen.Count != expected.Count)
-                throw new InvalidDataException("Official bundled-plugin inventory is incomplete.");
+            ProviderConfiguration.DiscoverBundledPluginNames(pluginsRoot);
         }
 
         // Package activation applies the same signature, manifest, archive-entry,

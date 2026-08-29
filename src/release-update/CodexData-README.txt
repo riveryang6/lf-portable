@@ -99,14 +99,15 @@ authentication/WebSocket retries that add no capability to this build.
 
 Bundled tools
 -------------
-  Node.js 24.14.0
+  Node.js 24.19.0
   Python 3.12.13
   Git for Windows 2.53.0.windows.3
-  pnpm 11.9.0
+  pnpm 11.19.0
   .NET SDK 8.0.423 and shared runtime 8.0.29 (portable; required by the
   launcher/runtime toolchain)
   GitHub CLI 2.97.0
-  Poppler and image conversion dependencies from the Codex runtime bundle
+  PowerShell 7.6.4, Poppler and image conversion dependencies from the Codex
+  runtime bundle
 
 Updates
 -------

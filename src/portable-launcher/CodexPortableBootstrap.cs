@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.3")]
-[assembly: AssemblyFileVersion("1.4.24.3")]
+[assembly: AssemblyVersion("1.4.24.5")]
+[assembly: AssemblyFileVersion("1.4.24.5")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap

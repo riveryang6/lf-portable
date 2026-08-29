@@ -35,6 +35,30 @@ def find_gh() -> str:
     raise ValueError("GitHub CLI (gh or gh.exe) is not available on PATH")
 
 
+def gh_file_argument(gh: str, path: Path) -> str:
+    """Translate WSL paths when a Windows GitHub CLI is selected."""
+
+    if not sys.platform.startswith("linux") or not gh.lower().endswith(".exe"):
+        return str(path)
+    wslpath = shutil.which("wslpath")
+    if not wslpath:
+        raise ValueError("wslpath is required when WSL uses a Windows gh.exe")
+    try:
+        translated = subprocess.run(
+            [wslpath, "-aw", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError(
+            f"cannot translate release asset for Windows gh.exe: {path}: {error}"
+        ) from error
+    if not translated:
+        raise ValueError(f"wslpath returned an empty release asset path: {path}")
+    return translated
+
+
 def main() -> int:
     args = parse_args()
     if not VERSION_PATTERN.fullmatch(args.version):
@@ -50,6 +74,7 @@ def main() -> int:
 
     try:
         gh = find_gh()
+        archive_arguments = [gh_file_argument(gh, archive) for archive in archives]
     except ValueError as error:
         print(f"publish-release.py: {error}", file=sys.stderr)
         return 1
@@ -59,7 +84,7 @@ def main() -> int:
         "release",
         "create",
         f"v{args.version}",
-        *(str(archive) for archive in archives),
+        *archive_arguments,
         "--repo",
         args.repository,
         "--title",

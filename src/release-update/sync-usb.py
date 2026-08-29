@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from typing import Iterator
 
 
@@ -32,9 +33,9 @@ RELEASE_COMMON_FILES = (
     "CodexData/packages/LFPortable-common.zip",
 )
 
-# These are generated from the package files on the next Windows start.  Keep
-# the list explicit so USB synchronization cannot remove user configuration,
-# SQLite state, secrets, sessions, logs, or unknown files.
+# These fixed paths are generated from package files on the next Windows start.
+# Marketplace and plugin-cache paths are discovered from the bundled catalog
+# below, so new official plugins do not require another hard-coded entry.
 DERIVED_RELEASE_PATHS = (
     "CodexData/app",
     # Transaction staging is disposable; the launcher recreates this empty
@@ -44,24 +45,13 @@ DERIVED_RELEASE_PATHS = (
     "CodexData/tools/dotnet",
     "CodexData/tools/gh",
     "CodexData/data/profile/.cache/codex-runtimes/codex-primary-runtime",
-    "CodexData/data/profile/.codex/offline-marketplaces/openai-primary-runtime",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/sites",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/browser",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/chrome",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/computer-use",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/codex-app-tools",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/latex",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/deep-research",
-    "CodexData/data/profile/.codex/plugins/cache/openai-bundled/visualize",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/documents",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/pdf",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/presentations",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/spreadsheets",
-    "CodexData/data/profile/.codex/plugins/cache/openai-primary-runtime/template-creator",
     "CodexData/portable-release.json",
     "CodexData/portable-package-manifest.json",
     "portable-package-manifest.json",
 )
+PLUGIN_CACHE_ROOT = "CodexData/data/profile/.codex/plugins/cache"
+OFFLINE_MARKETPLACE_ROOT = "CodexData/data/profile/.codex/offline-marketplaces"
+COMMON_PACKAGE_PATH = "CodexData/packages/LFPortable-common.zip"
 
 
 class SyncError(RuntimeError):
@@ -475,7 +465,84 @@ def validate_target_paths(target: Path, copied_files: list[tuple[str, Path]]) ->
         reject_reparse_path(candidate, f"USB destination {relative_path}")
 
 
-def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Path]]) -> list[str]:
+def marketplace_names_from_archive(package: Path, prefix: str) -> set[str]:
+    """Read catalog names from an archive's marketplace marker files."""
+
+    suffix = "/.agents/plugins/marketplace.json"
+    names: set[str] = set()
+    try:
+        with zipfile.ZipFile(package) as archive:
+            for raw_name in archive.namelist():
+                name = raw_name.replace("\\", "/")
+                if not name.startswith(prefix) or not name.endswith(suffix):
+                    continue
+                catalog = name[len(prefix) : -len(suffix)]
+                if not catalog or "/" in catalog or catalog in {".", ".."}:
+                    raise SyncError(
+                        f"release archive has an invalid marketplace catalog path: {raw_name}"
+                    )
+                if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", catalog) is None:
+                    raise SyncError(
+                        f"release archive has an unsafe marketplace catalog name: {catalog}"
+                    )
+                names.add(catalog)
+    except (OSError, zipfile.BadZipFile) as error:
+        raise SyncError(f"cannot inspect release archive {package}: {error}") from error
+    if not names:
+        raise SyncError(f"release archive has no marketplace catalog: {package}")
+    return names
+
+
+def release_catalogs(copied_files: list[tuple[str, Path]]) -> set[str]:
+    """Discover package-owned catalogs before a deployment can modify its target."""
+
+    common_package = next(
+        (source for relative_path, source in copied_files if relative_path == COMMON_PACKAGE_PATH),
+        None,
+    )
+    if common_package is None:
+        raise SyncError(f"managed release input is missing: {COMMON_PACKAGE_PATH}")
+    desktop_package = next(
+        (source for relative_path, source in copied_files if relative_path.endswith(".msix")),
+        None,
+    )
+    if desktop_package is None:
+        raise SyncError("managed release input is missing an architecture-specific desktop package")
+    catalogs = marketplace_names_from_archive(
+        common_package, "data/profile/.codex/offline-marketplaces/"
+    )
+    catalogs.update(marketplace_names_from_archive(desktop_package, "app/resources/plugins/"))
+    return catalogs
+
+
+def derived_plugin_paths(
+    target: Path, catalogs: set[str]
+) -> list[tuple[str, Path]]:
+    """Return package-owned marketplace and cache paths."""
+
+    marketplace_root = target / OFFLINE_MARKETPLACE_ROOT
+    paths: list[tuple[str, Path]] = []
+    if marketplace_root.is_dir():
+        reject_reparse_path(marketplace_root, "USB offline marketplace directory")
+        for catalog in sorted(catalogs, key=str.casefold):
+            candidate = marketplace_root / catalog
+            if os.path.lexists(candidate):
+                paths.append((f"{OFFLINE_MARKETPLACE_ROOT}/{catalog}", candidate))
+    cache_root = target / PLUGIN_CACHE_ROOT
+    if cache_root.is_dir():
+        reject_reparse_path(cache_root, "USB plugin cache directory")
+        for catalog in sorted(catalogs, key=str.casefold):
+            candidate = cache_root / catalog
+            if os.path.lexists(candidate):
+                paths.append((f"{PLUGIN_CACHE_ROOT}/{catalog}", candidate))
+    return paths
+
+
+def prune_obsolete_release_files(
+    target: Path,
+    copied_files: list[tuple[str, Path]],
+    catalogs: set[str] | None = None,
+) -> list[str]:
     """Remove superseded packages and generated state, never user data."""
 
     reject_reparse_path(target, "USB root")
@@ -486,6 +553,8 @@ def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Pat
     if package_directory.is_dir():
         candidates.extend(package_directory.glob("LFPortable-*.msix"))
     removed = []
+    if catalogs is None:
+        catalogs = release_catalogs(copied_files)
     for candidate in candidates:
         relative_path = str(candidate.relative_to(target)).replace("\\", "/")
         if relative_path in copied_names:
@@ -494,8 +563,9 @@ def prune_obsolete_release_files(target: Path, copied_files: list[tuple[str, Pat
         if candidate.name in {"LFPortable-x64.msix", "LFPortable-arm64.msix"}:
             os.unlink(native_delete_path(candidate))
             removed.append(relative_path)
-    for relative_path in DERIVED_RELEASE_PATHS:
-        candidate = target / relative_path
+    derived_paths = [(relative_path, target / relative_path) for relative_path in DERIVED_RELEASE_PATHS]
+    derived_paths.extend(derived_plugin_paths(target, catalogs))
+    for relative_path, candidate in derived_paths:
         if not os.path.lexists(candidate):
             continue
         reject_reparse_path(candidate, f"obsolete USB path {relative_path}")
@@ -532,6 +602,7 @@ def execute(args: argparse.Namespace) -> None:
     if paths_overlap(source, target):
         raise SyncError("--source-root and --usb-root must be distinct, non-overlapping directories")
     files = release_sources(source)
+    catalogs = release_catalogs(files)
 
     source_windows_path = windows_path(args.source_root, source)
     target_windows_path = windows_path(args.usb_root, target)
@@ -549,7 +620,7 @@ def execute(args: argparse.Namespace) -> None:
         # started during the copy must never be left running while its USB
         # payload is pruned.
         wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
-        removed = prune_obsolete_release_files(target, files)
+        removed = prune_obsolete_release_files(target, files, catalogs)
         emit(
             {
                 "action": "synced",
@@ -567,7 +638,7 @@ def execute(args: argparse.Namespace) -> None:
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
     copy_without_deleting(files, target)
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
-    removed = prune_obsolete_release_files(target, files)
+    removed = prune_obsolete_release_files(target, files, catalogs)
     emit(
         {
             "action": "synced",

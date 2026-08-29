@@ -15,16 +15,17 @@ Do not copy plugin contents directly into a catalog directory or create a
 The compact common runtime ZIP intentionally contains no derived plugin cache.
 On the first portable start, the launcher reconstructs the cache from the
 offline marketplace under the same portable root and the matching signed
-desktop package stored there. For the current desktop layout, x64 uses thirteen
+desktop package stored there. For the current desktop layout, x64 uses fifteen
 plugins:
 
 - `openai-bundled`: `sites`, `browser`, `chrome`, `computer-use`,
-  `codex-app-tools`, `latex`, `deep-research`, and `visualize`.
+  `codex-app-tools`, `latex`, `deep-research`, `unified-computer-use`,
+  `user-writing`, and `visualize`.
 - `openai-primary-runtime`: `documents`, `pdf`, `presentations`,
   `spreadsheets`, and `template-creator`.
 
 ARM64 uses the same set except for `latex`, which is not included in the
-official ARM64 package.
+official ARM64 package, for a total of fourteen plugins.
 
 If a stopped portable installation has a missing or outdated cache, start it
 through `CodexPortable.exe` and let the launcher rebuild the derived entries.
