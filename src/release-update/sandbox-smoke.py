@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from xml.sax.saxutils import escape
 
 
@@ -52,9 +55,79 @@ def windows_directory() -> Path:
     return result
 
 
-def build_configuration(release_root: str, tools_root: str, architecture: str) -> str:
+def windows_process_ids(image_name: str) -> set[int]:
+    """Return Windows PIDs for an image, using stable CSV tasklist output."""
+    result = subprocess.run(
+        ["tasklist.exe", "/fi", f"IMAGENAME eq {image_name}", "/fo", "csv", "/nh"],
+        check=False,
+        text=True,
+        capture_output=True,
+        errors="replace",
+    )
+    process_ids: set[int] = set()
+    for row in csv.reader(result.stdout.splitlines()):
+        if len(row) < 2 or row[0].casefold() != image_name.casefold():
+            continue
+        try:
+            process_ids.add(int(row[1]))
+        except ValueError:
+            continue
+    return process_ids
+
+
+def run_sandbox(sandbox: Path, configuration_windows: str) -> None:
+    """Launch Sandbox and keep the .wsb alive until its VM session exits.
+
+    WindowsSandbox.exe is only a client launcher and may return before the
+    service has parsed the configuration.  The caller must therefore defer
+    deleting the temporary .wsb until the newly-created server process exits.
+    """
+    existing_servers = windows_process_ids("WindowsSandboxServer.exe")
+    command = [str(sandbox), configuration_windows]
+    process = subprocess.Popen(command)
+    try:
+        deadline = time.monotonic() + 60
+        new_servers: set[int] = set()
+        while time.monotonic() < deadline:
+            if process.poll() is not None and process.returncode not in (0, None):
+                raise subprocess.CalledProcessError(process.returncode, command)
+            new_servers = windows_process_ids("WindowsSandboxServer.exe") - existing_servers
+            if new_servers:
+                # Give the service a short interval to finish reading the file
+                # before any cleanup can remove it.
+                time.sleep(2)
+                if not (windows_process_ids("WindowsSandboxServer.exe") & new_servers):
+                    raise RuntimeError("Windows Sandbox exited during initialization")
+                break
+            time.sleep(0.25)
+        if not new_servers:
+            if existing_servers:
+                raise RuntimeError("another Windows Sandbox session is already running")
+            raise RuntimeError("Windows Sandbox did not start within 60 seconds")
+
+        print("Windows Sandbox is open. Click Start Codex in the launcher, confirm that the desktop opens, then close Sandbox.")
+        while windows_process_ids("WindowsSandboxServer.exe") & new_servers:
+            time.sleep(1)
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+def build_configuration(release_root: str, tools_root: str, architecture: str,
+                        release_name: str | None = None) -> str:
     release = escape(release_root)
     tools = escape(tools_root)
+    selected = ""
+    if release_name is not None:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", release_name):
+            raise ValueError(f"unsafe release executable name: {release_name}")
+        selected = f' "{release_name}"'
     return f"""<Configuration>
   <MappedFolders>
     <MappedFolder>
@@ -75,7 +148,7 @@ def build_configuration(release_root: str, tools_root: str, architecture: str) -
   <VideoInput>Disable</VideoInput>
   <MemoryInMB>4096</MemoryInMB>
   <LogonCommand>
-    <Command>cmd.exe /d /c C:\\Tools\\sandbox-manual-runner.cmd {architecture}</Command>
+    <Command>cmd.exe /d /c C:\\Tools\\sandbox-manual-runner.cmd {architecture}{selected}</Command>
   </LogonCommand>
 </Configuration>
 """
@@ -84,8 +157,10 @@ def build_configuration(release_root: str, tools_root: str, architecture: str) -
 def main() -> int:
     args = parse_args()
     release_input = args.release_root.expanduser().resolve()
+    explicit_bootstrapper: Path | None = None
     if release_input.is_file():
         mapping_root = release_input.parent
+        explicit_bootstrapper = release_input
         selected_name = release_input.name.casefold()
         if selected_name == "lfportable-x64.exe":
             architecture = "x64"
@@ -105,8 +180,8 @@ def main() -> int:
                 architecture = "x64"
             else:
                 raise ValueError("--architecture is required when both direct release EXEs are present")
-    bootstrapper = mapping_root / "CodexPortable.exe"
-    if not bootstrapper.is_file():
+    bootstrapper = explicit_bootstrapper or (mapping_root / "CodexPortable.exe")
+    if explicit_bootstrapper is None and not bootstrapper.is_file():
         bootstrapper = mapping_root / f"LFPortable-{architecture}.exe"
     tools_root = Path(__file__).resolve().parent
     runner = tools_root / "sandbox-manual-runner.cmd"
@@ -133,7 +208,8 @@ def main() -> int:
         os.close(config_fd)
         configuration = Path(config_name)
         configuration.write_text(
-            build_configuration(release_windows, tools_windows, architecture),
+            build_configuration(release_windows, tools_windows, architecture,
+                                explicit_bootstrapper.name if explicit_bootstrapper else None),
             encoding="utf-8", newline="\r\n"
         )
         configuration_windows = windows_path(configuration)
@@ -141,9 +217,9 @@ def main() -> int:
         if not sandbox.is_file():
             raise ValueError(f"Windows Sandbox is unavailable: {sandbox}")
 
-        print("Windows Sandbox is opening. Click Start Codex in the launcher, confirm the desktop, then close Sandbox.")
-        subprocess.run([str(sandbox), configuration_windows], check=True)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        run_sandbox(sandbox, configuration_windows)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as error:
         print(f"sandbox-smoke.py: {error}", file=sys.stderr)
         status = 1
     finally:

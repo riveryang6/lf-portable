@@ -22,7 +22,9 @@ Use WSL for source builds, release assembly, Git work, and GitHub upload. The
 supported build requires Bash, Python 3, a .NET SDK, Mono's .NET Framework 4.8
 reference assemblies, and standard GNU/binutils tools. On Debian or Ubuntu,
 installing `mono-devel` and `binutils` supplies the reference assemblies and
-PE inspection tools when they are not already present.
+PE inspection tools when they are not already present. Windows-side Scoop or
+Chocolatey packages do not substitute for the WSL Mono reference assemblies;
+keep the build toolchain inside WSL.
 
 Build the launcher matrix from WSL:
 
@@ -45,7 +47,7 @@ src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.6
+  --version 1.4.24.7
 ```
 
 The command creates two direct, architecture-specific executables:
@@ -54,23 +56,21 @@ runtime and exactly one official MSIX in its internal payload, so no
 `CodexData` directory is present beside a fresh download. Use a new output
 directory for each package attempt.
 
-The retired Windows-script builder, release staging, package-manifest, and
-publisher workflows are intentionally absent. They were replaced by the Bash
-and Python entry points above. Product security behavior remains in the
+The retired Windows-script builder and legacy staging/package-metadata
+workflows are intentionally absent. Bash and Python entry points above perform
+release assembly and publishing. Product security behavior remains in the
 launcher: official signed desktop packages, package identity, architecture,
-and safe archive extraction are still validated at runtime. The offline
-packages do not contain release descriptors, manifests, checkpoints, or
-whole-tree digest records.
+and safe archive extraction are still validated at runtime. The release adds no
+custom descriptor, checkpoint, receipt, or whole-tree digest record; the
+official MSIX keeps its platform-required `AppxManifest.xml`.
 
-## Windows Manual Acceptance
+## Windows Reproduction And Troubleshooting
 
-Windows is still required for the two checks that need real Windows GUI and
-device behavior. They are manual observations, not scripted release gates, and
-they create no checkpoint, evidence directory, receipt, or result file.
-When no volume labelled `CODEX_USB` is mounted, skip the USB deployment and
-both USB launch observations; record that omission in the delivery notes, but
-do not block the release. When the volume is mounted, the USB observations
-remain required.
+Use real Windows GUI and device behavior when reproducing Windows-specific
+launcher problems. These observations are diagnostic aids, not completion,
+approval, or release prerequisites, and they create no checkpoint, evidence
+directory, receipt, or result file. When no volume labelled `CODEX_USB` is
+mounted, ignore the USB scenario; it must not block delivery or publishing.
 
 Run the Sandbox observation from WSL. It uses WSL interop to map the release
 read-only with networking disabled, opens the launcher and Codex Desktop, and
@@ -82,13 +82,19 @@ src/release-update/sandbox-smoke.sh \
   --architecture x64
 ```
 
-Before closing Sandbox, confirm that the LF launcher and Codex Desktop window
-actually opened and that the first-run model announcement and `Try model` CTA
-did not appear. Use `--architecture arm64` on an ARM64 host.
+The smoke helper keeps its temporary `.wsb` configuration until the Sandbox
+session has ended. Do not manually remove that file while `WindowsSandbox.exe`
+or its service is starting; an early deletion can produce a misleading
+`0x80070002` initialization error.
 
-Deploy the same release to the real USB drive from WSL. The helper uses WSL
-interop for the Windows volume and process APIs, and `robocopy` copies the
-managed release files. It removes only the old expanded desktop/runtime,
+When investigating a Sandbox startup problem, observe whether the LF launcher
+and Codex Desktop window open and whether the first-run model announcement or
+`Try model` CTA appears. Use `--architecture arm64` on an ARM64 host.
+
+Deploy the architecture EXE directly to the real USB drive from WSL. The
+helper uses WSL interop for the Windows volume and process APIs and replaces
+only the root `CodexPortable.exe`; a structured release directory is accepted
+for legacy/migration use. It removes only the old expanded desktop/runtime,
 package-owned offline-marketplace and plugin-cache catalogs discovered from the
 common ZIP and matching MSIX, transaction staging, and retired descriptor paths
 so the next start rebuilds them from the new offline package;
@@ -97,22 +103,20 @@ preserved.
 
 ```bash
 src/release-update/sync-usb.sh \
-  --source-root /path/to/release-parent/release \
-  --architecture x64 \
+  --source-root /path/to/release/LFPortable-x64.exe \
   --usb-root "/mnt/<CODEX_USB-drive-letter>" \
   --execute
 ```
 
-`--usb-root` must be the root of the drive labelled `CODEX_USB`. Then start
-`CodexPortable.exe` from that drive in Windows and confirm that the desktop
-opens. Before this observation, close task-started LF processes and remove any
-task-created fixed-disk LF state or session cache; launch only the USB-root
-bootstrapper and confirm the desktop executable runs below that same USB root.
-Repeat this launch after task cleanup. With an independently installed
-WindowsApps Codex Desktop already running, also confirm that the portable
-instance starts alongside it and that
-reopening the same portable root does not start a second portable instance.
-Use the release directory matching the USB target host architecture.
+`--usb-root` must be the root of the drive labelled `CODEX_USB`. When
+reproducing a USB-only problem, close task-started LF processes and remove any
+task-created fixed-disk LF state or session cache, then launch only the USB-root
+`CodexPortable.exe` and observe whether its desktop executable runs below that
+same USB root. An independently installed WindowsApps Codex Desktop may remain
+running to reproduce coexistence behavior, and reopening the same portable root
+should not start a second portable instance. Use the EXE matching the USB
+target host architecture. These observations are diagnostic and do not block
+building, delivery, or publishing.
 
 WSL remains the workflow entry point, while its interop bridge invokes the
 Windows process inspection, Windows Sandbox, and desktop interaction needed by
@@ -120,20 +124,17 @@ these two checks.
 
 ## Publish
 
-After the required real Windows observations succeed for the exact executable,
-publish from WSL with the GitHub CLI. When `CODEX_USB` is not mounted, the
-Sandbox observation is the required GUI acceptance and the USB observation is
-skipped as described above. A stable release has two program assets:
+Publish from WSL with the GitHub CLI. A stable release has two program assets:
 `LFPortable-x64.exe` and `LFPortable-arm64.exe`.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.6"
-git tag -a v1.4.24.6 -m "LF Portable 1.4.24.6"
-git push origin HEAD:main refs/tags/v1.4.24.6:refs/tags/v1.4.24.6
+git commit -m "Release LF Portable 1.4.24.7"
+git tag -a v1.4.24.7 -m "LF Portable 1.4.24.7"
+git push origin HEAD:main refs/tags/v1.4.24.7:refs/tags/v1.4.24.7
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.6
+  --version 1.4.24.7
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

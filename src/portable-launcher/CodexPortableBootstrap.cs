@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.6")]
-[assembly: AssemblyFileVersion("1.4.24.6")]
+[assembly: AssemblyVersion("1.4.24.7")]
+[assembly: AssemblyFileVersion("1.4.24.7")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -497,7 +497,12 @@ namespace CodexPortableBootstrap
                     AssertSafeExistingAncestry(portableRoot,
                         Path.GetDirectoryName(item.TargetPath));
                     AssertExistingPathIsRegularFile(item.TargetPath);
-                    if (!replaceExisting && new FileInfo(item.TargetPath).Length ==
+                    // The launchers are small and carry the upgrade logic.  A
+                    // same-version rebuild can keep their length unchanged,
+                    // so refresh all three on every bootstrap run instead of
+                    // allowing stale launcher code to survive an EXE swap.
+                    if (!replaceExisting && !IsLauncherReleaseInput(item.RelativePath) &&
+                        new FileInfo(item.TargetPath).Length ==
                         item.ArchiveEntry.Length) continue;
                 }
                 planned.Add(item);
@@ -694,16 +699,18 @@ namespace CodexPortableBootstrap
                             .Replace('/', Path.DirectorySeparatorChar));
                     string targetParent = Path.GetDirectoryName(item.TargetPath);
                     EnsureSafeDirectory(dataRoot, targetParent);
+                    bool replaceItem = replaceExisting ||
+                        IsLauncherReleaseInput(item.RelativePath);
                     if (PathExists(item.TargetPath))
                     {
                         AssertExistingPathIsRegularFile(item.TargetPath);
-                        if (!replaceExisting)
+                        if (!replaceItem)
                         {
                             File.Delete(staged);
                             continue;
                         }
                     }
-                    MoveAtomically(staged, item.TargetPath, replaceExisting);
+                    MoveAtomically(staged, item.TargetPath, replaceItem);
                 }
             }
             catch (Exception upgradeError)
@@ -739,6 +746,14 @@ namespace CodexPortableBootstrap
             }
         }
 
+        private static bool IsLauncherReleaseInput(string relativePath)
+        {
+            return relativePath.StartsWith("CodexData/tools/launchers/",
+                    StringComparison.OrdinalIgnoreCase) &&
+                relativePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                relativePath.IndexOf('/', "CodexData/tools/launchers/".Length) < 0;
+        }
+
         private static void MoveDerivedStateToBackup(string portableRoot,
             string stagingRoot, List<DerivedStateEntry> moved)
         {
@@ -756,13 +771,24 @@ namespace CodexPortableBootstrap
 
             string backupRoot = Path.Combine(stagingRoot, ".derived");
             EnsureSafeDirectory(stagingRoot, backupRoot);
+            HashSet<string> expectedDirectories = new HashSet<string>(
+                FixedDerivedDirectories, StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < relativePaths.Count; i++)
             {
                 string relative = relativePaths[i];
                 string target = ResolveTargetPath(portableRoot, relative);
                 if (!PathExists(target)) continue;
                 AssertSafeExistingAncestry(portableRoot, Path.GetDirectoryName(target));
-                bool directory = Directory.Exists(target);
+                bool expectedDirectory = expectedDirectories.Contains(relative) ||
+                    relative.StartsWith("CodexData/data/profile/.codex/offline-marketplaces/",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    relative.StartsWith("CodexData/data/profile/.codex/plugins/cache/",
+                        StringComparison.OrdinalIgnoreCase);
+                FileAttributes attributes = File.GetAttributes(target);
+                bool directory = (attributes & FileAttributes.Directory) != 0;
+                if (directory != expectedDirectory)
+                    throw new IOException("Portable upgrade found a package-owned path with the wrong type: " +
+                        target);
                 if (directory) AssertExistingDirectoryIsSafe(target);
                 else AssertExistingPathIsRegularFile(target);
 

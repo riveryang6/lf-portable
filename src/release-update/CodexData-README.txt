@@ -23,8 +23,9 @@ The official Codex Desktop payloads currently published by OpenAI are x64 and
 ARM64. The compact release stores them as the verified
 CodexData\packages\LFPortable-x64.msix and
 CodexData\packages\LFPortable-arm64.msix files. On the first manual start from
-the CODEX_USB root, the launcher expands only the package matching the Windows
-architecture into a derived runtime location below that same portable root. A
+the portable root (for example, the root of a `CODEX_USB` volume), the launcher
+expands only the package matching the Windows architecture into a derived
+runtime location below that same portable root. A
 32-bit x86 or ARM Windows host can run the
 bootstrapper and diagnostics, but startup stops with a clear message because no
 official x86/ARM Desktop payload is published. The launcher never runs an
@@ -32,7 +33,8 @@ incompatible PE file as a workaround.
 
 Quick start
 -----------
-1. Double-click CodexPortable.exe in the CODEX_USB root. Do not run
+1. Double-click CodexPortable.exe in its portable root (use the `CODEX_USB`
+   root when running from the USB drive). Do not run
    CodexDesktop.exe or ChatGPT.exe directly. The launcher window is only the control surface; click
    "Start Codex" yourself after the payload and API state are ready.
 2. Choose "Set custom API" and enter the Responses API base URL, model and key.
@@ -117,8 +119,9 @@ LF releases are GitHub-only and contain LF-branded artifacts. Each stable
 release has two offline assets: `LFPortable-x64.exe` and
 `LFPortable-arm64.exe`. Download the asset matching the Windows host. Each
 asset contains the common portable runtime and one official MSIX internally,
-with no pre-created `CodexData` directory, release descriptor, package
-manifest, checkpoint, or whole-tree digest record.
+with no pre-created `CodexData` directory or custom release descriptor,
+checkpoint, receipt, or whole-tree digest record. The official MSIX retains its
+platform-required `AppxManifest.xml`.
 The launcher still validates the official package signature, OpenAI package
 identity, architecture, and safe archive paths before installing it. Plugin
 auto-update and in-product program update transactions are disabled; replace
@@ -128,9 +131,9 @@ An architecture EXE contains the bootstrapper, three launcher cores, two
 managed documentation files, the common runtime ZIP, and its matching MSIX.
 The derived desktop payload, runtime, offline marketplace, required plugin
 cache, and transaction staging are recreated from those inputs on the first
-manual start or after an upgrade. USB sync replaces only the root EXE; the
-bootstrapper performs the data-preserving upgrade, leaving `CodexData\data`,
-logs, and unknown user entries intact.
+manual start or after an upgrade. Single-file USB sync replaces only the root
+EXE; the bootstrapper performs the data-preserving upgrade, leaving
+`CodexData\data`, logs, and unknown user entries intact.
 
 Important limits
 ----------------

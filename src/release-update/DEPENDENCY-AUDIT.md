@@ -1,6 +1,6 @@
 # Portable Dependency Audit
 
-This audit covers the common runtime archive used by LF Portable 1.4.24.6:
+This audit covers the common runtime archive used by LF Portable 1.4.24.7:
 `release/CodexData/packages/LFPortable-common.zip`. The archive is deliberately
 self-contained. The launcher selects the copies below from the portable tree
 and does not depend on a host installation, registry entry, or host `PATH` for
@@ -15,7 +15,7 @@ descriptor, or startup validation record.
 
 | Bundle | Version observed | Compressed size | Evidence and decision |
 | --- | --- | ---: | --- |
-| Portable .NET SDK and shared runtimes | SDK 8.0.423; runtimes 8.0.29 | 237.49 MiB | `tools/dotnet/dotnet.exe` is a launcher prerequisite and `DOTNET_ROOT` is pinned to this tree. Keep the SDK for the current Codex tool surface; a runtime-only package needs separate USB and Sandbox testing. |
+| Portable .NET SDK and shared runtimes | SDK 8.0.423; runtimes 8.0.29 | 237.49 MiB | `tools/dotnet/dotnet.exe` is a launcher prerequisite and `DOTNET_ROOT` is pinned to this tree. Keep the SDK for the current Codex tool surface; a runtime-only package would need its own diagnostic checks before adoption. |
 | Git for Windows runtime | 2.53.0.3 | 44.53 MiB | The launcher requires `.../dependencies/native/git/cmd/git.exe` and exports `CODEX_PREFERRED_GIT_EXECUTABLE`. Keep the bundled DLLs and companion runtime. |
 | Portable Python | 3.12.13 | 149.44 MiB | The launcher requires `.../dependencies/python/python.exe`. Documents, PDF, presentations, and spreadsheet skills invoke it and use bundled packages such as `pandas`, `numpy`, `pypdf`, `python-docx`, and `reportlab`. Keep it portable. |
 | Portable Node.js and modules | 24.19.0 | 122.52 MiB | The launcher requires `.../dependencies/node/bin/node.exe`. Presentation, template-creator, spreadsheet/artifact tooling, and browser/CUA helpers use the portable Node path and modules. Keep it portable. |
@@ -40,13 +40,16 @@ portable contract.
   `gh`, and the offline marketplace. The supported package must continue to
   run on a clean machine with no preinstalled developer tools.
 * **Do not trim or repackage the signed MSIX.** Its Authenticode signature,
-  `AppxManifest.xml`, publisher identity, architecture, and payload are checked
-  together when the desktop package is prepared.
+  platform `AppxManifest.xml`, publisher identity, architecture, and payload
+  are checked together when the desktop package is prepared. These are package
+  trust checks, not a custom release checkpoint or approval gate.
 * **A future split-package experiment is reasonable.** A small core package
   could be paired with optional Office/PDF/Python, presentation/artifact-tool,
-  and browser/CUA packs. Each pack must be independently usable offline and
-  must be exercised from both `CODEX_USB` and Windows Sandbox before becoming a
-  release format. Host-installed copies are not an acceptable substitute.
+  and browser/CUA packs. Each pack should be independently usable offline.
+  When a matching `CODEX_USB` volume or Windows Sandbox is available, those
+  environments are useful diagnostic observations for the split; they are not
+  release, approval, or completion prerequisites. Host-installed copies are not
+  an acceptable substitute for the portable dependencies.
 * **`gh` is the first optional candidate, not a major size win.** It saves only
   about 13.5 MiB and is still a current launcher prerequisite, so it stays in
   this release.
@@ -64,13 +67,18 @@ for both x64 and ARM64. Microsoft Store product `9PLM9XGG6VKS` was resolved
 through `store.rg-adguard.net` on 2026-08-30 because the Store did not expose a
 direct offline link. The resulting files were downloaded from
 `tlu.dl.delivery.mp.microsoft.com`; the third-party site is not a distribution
-or trust source. Their manifests, architectures, and Authenticode signatures
-were inspected before release assembly.
+or trust source. Scoop and Chocolatey package listings are not used as the
+Desktop/MSIX version authority: they may expose only a CLI or a lagging build.
+Their packages must not replace the official Microsoft-delivered desktop input.
+The downloaded MSIX manifests, architectures, and Authenticode signatures were
+inspected before release assembly. This records package provenance; USB and
+Windows Sandbox observations remain optional diagnostics and do not block
+assembly or publishing.
 
 No library is downloaded, installed, or updated during first launch. The
-supported USB/Sandbox release is therefore fully offline; a CDN is an optional
-future distribution optimization, never a startup dependency or hidden
-installation step.
+offline release is therefore fully self-contained and suitable for USB or
+Windows Sandbox observation; a CDN is an optional future distribution
+optimization, never a startup dependency or hidden installation step.
 
 ## Mainland CDN Probe
 

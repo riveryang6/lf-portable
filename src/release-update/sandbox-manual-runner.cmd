@@ -2,8 +2,10 @@
 setlocal EnableExtensions DisableDelayedExpansion
 
 set "ARCH=%~1"
+set "EXPLICIT_RELEASE=%~2"
 if /i "%ARCH%"=="arm64" set "RELEASE_NAME=LFPortable-arm64.exe"
 if /i "%ARCH%"=="x64" set "RELEASE_NAME=LFPortable-x64.exe"
+if defined EXPLICIT_RELEASE set "RELEASE_NAME=%EXPLICIT_RELEASE%"
 if not defined RELEASE_NAME set "RELEASE_NAME=CodexPortable.exe"
 
 if not exist "C:\Input\release\CodexPortable.exe" if not exist "C:\Input\release\%RELEASE_NAME%" (
@@ -19,7 +21,8 @@ if errorlevel 8 (
   exit /b 1
 )
 
-if not exist "C:\LFPortable\CodexPortable.exe" copy /y "C:\LFPortable\%RELEASE_NAME%" "C:\LFPortable\CodexPortable.exe" >nul
+if defined EXPLICIT_RELEASE copy /y "C:\LFPortable\%RELEASE_NAME%" "C:\LFPortable\CodexPortable.exe" >nul
+if not defined EXPLICIT_RELEASE if not exist "C:\LFPortable\CodexPortable.exe" copy /y "C:\LFPortable\%RELEASE_NAME%" "C:\LFPortable\CodexPortable.exe" >nul
 if not exist "C:\LFPortable\CodexPortable.exe" (
   echo Unable to select the LF Portable executable.
   pause

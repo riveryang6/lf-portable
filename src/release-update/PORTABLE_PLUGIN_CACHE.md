@@ -34,7 +34,8 @@ cache entries in place. There is no separate repair script in the WSL-first
 build and release workflow.
 
 Release assembly is performed from WSL with `release.sh`; the resulting
-architecture-specific EXEs are the GitHub assets. USB deployment and the
-actual Windows desktop check remain Windows-only operations because they need
-the Windows volume, process, and GUI APIs. The cache is never copied from one
-USB installation to another as a release input.
+architecture-specific EXEs are the GitHub assets. USB deployment and a real
+Windows desktop observation remain Windows-only diagnostics because they need
+the Windows volume, process, and GUI APIs. If no `CODEX_USB` volume is mounted,
+skip that scenario; it never blocks assembly, delivery, or publishing. The
+cache is never copied from one USB installation to another as a release input.

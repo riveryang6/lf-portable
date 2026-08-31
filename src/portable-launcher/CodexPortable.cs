@@ -27,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.6")]
-[assembly: AssemblyFileVersion("1.4.24.6")]
+[assembly: AssemblyVersion("1.4.24.7")]
+[assembly: AssemblyFileVersion("1.4.24.7")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -1386,7 +1386,7 @@ namespace CodexPortable
             Action<FirstLaunchProgress> progress)
         {
             EnsureCommonPayload(layout, progress);
-            if (!File.Exists(layout.OfficialAppExe))
+            if (!PortableBranding.IsPrepared(layout))
                 EnsureDesktopPayload(layout, progress);
         }
 
@@ -1434,7 +1434,7 @@ namespace CodexPortable
         internal static void EnsureDesktopPayload(PortableLayout layout,
             Action<FirstLaunchProgress> progress)
         {
-            if (File.Exists(layout.OfficialAppExe)) return;
+            if (PortableBranding.IsPrepared(layout)) return;
             if (!ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture))
                 throw new PlatformNotSupportedException("No desktop package is available for this Windows architecture.");
             if (!File.Exists(layout.BundledDesktopPackage))
@@ -1444,7 +1444,7 @@ namespace CodexPortable
                 throw new IOException("Another portable installation or repair is in progress.");
             try
             {
-                if (File.Exists(layout.OfficialAppExe)) return;
+                if (PortableBranding.IsPrepared(layout)) return;
                 if (PortableProcess.IsDesktopRunning(layout))
                     throw new IOException("Desktop installation is blocked while Codex Desktop is running.");
                 PortablePackage.StageVerifiedReleasePayload(layout, layout.BundledDesktopPackage,
@@ -2584,7 +2584,6 @@ namespace CodexPortable
             "function G5(e,t=(0,p.join)(l.app.getAppPath(),`src`,`icons`)){let n=`${wS(e)}.ico`;if(l.app.isPackaged){let e=(0,p.join)(process.resourcesPath,n);if((0,_.existsSync)(e))return e}let r=(0,p.join)(t,n);return(0,_.existsSync)(r)?r:null}";
         private const string WebviewAssetPrefix = "webview/assets/";
         private const string AppInitialAssetStem = "app-initial";
-        private const string OnboardingPageAssetStem = "onboarding-page";
         private const string OfficialStandardOnboardingGateText =
             "shouldShowStandardOnboarding:y";
         private const string PortableStandardOnboardingGateText =
@@ -2625,24 +2624,24 @@ namespace CodexPortable
         private static readonly string PortableWindowsSandboxComposerStateText =
             "Or=!1".
                 PadRight(OfficialWindowsSandboxComposerStateText.Length);
+        // A readiness failure from the desktop app-server otherwise remains a
+        // submit-blocking state even when LF has already selected the
+        // config.toml danger-full-access mode.  Normalize the three fields in
+        // the composer snapshot together: the requirement value, its error
+        // flag, and the pending flag.  Keep this replacement byte-preserving
+        // so the surrounding ASAR offsets and integrity metadata remain valid.
+        private const string OfficialWindowsSandboxReadinessStateText =
+            "windowsSandboxRequirement:Dr,hasWindowsSandboxRequirementError:Tr,isWindowsSandboxRequirementPending:Er";
+        private static readonly string PortableWindowsSandboxReadinessStateText =
+            "windowsSandboxRequirement:!1,hasWindowsSandboxRequirementError:!1,isWindowsSandboxRequirementPending:!1";
         private const string OfficialWindowsSandboxFinalStepText =
             "function hc(e,t){return e.finalStep.shouldShow&&!t?X.WindowsSandboxSetup:X.Complete}";
         private static readonly string PortableWindowsSandboxFinalStepText =
             "function hc(e,t){return X.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
         private const int OnboardingBrandPaddingLength = 2;
-        private const int ExpectedOnboardingLocaleEntries = 65;
-        private const int ExpectedTranslatedOnboardingLocaleEntries = 64;
-        // English defaults live in onboarding-page; the other 64 locale bundles carry translated values.
-        private static readonly string[] TranslatedOnboardingAssetStems = new string[] {
-            "am", "ar", "bg-BG", "bn-BD", "bs-BA", "ca-ES", "cs-CZ", "da-DK",
-            "de-DE", "el-GR", "es-419", "es-ES", "et-EE", "fa", "fi-FI", "fr-CA",
-            "fr-FR", "gu-IN", "hi-IN", "hr-HR", "hu-HU", "hy-AM", "id-ID", "is-IS",
-            "it-IT", "ja-JP", "ka-GE", "kk", "kn-IN", "ko-KR", "lt", "lv-LV",
-            "mk-MK", "ml", "mn", "mr-IN", "ms-MY", "my-MM", "nb-NO", "nl-NL",
-            "pa", "pl-PL", "pt-BR", "pt-PT", "ro-RO", "ru-RU", "sk-SK", "sl-SI",
-            "so-SO", "sq-AL", "sr-RS", "sv-SE", "sw-TZ", "ta-IN", "te-IN", "th-TH",
-            "tl", "tr-TR", "uk-UA", "ur", "vi-VN", "zh-CN", "zh-HK", "zh-TW"
-        };
+        // English defaults live in onboarding-page. Localized assets are
+        // discovered from their message keys below so a new locale or a
+        // changed bundler hash does not make the payload unpreparable.
 
         private sealed class IntegrityState
         {
@@ -3293,6 +3292,7 @@ namespace CodexPortable
                 int tryModelAvailabilityGateEntries = 0;
                 int tryModelUpgradeGateEntries = 0;
                 int windowsSandboxComposerStateEntries = 0;
+                int windowsSandboxReadinessStateEntries = 0;
                 for (int i = 0; i < archive.Entries.Count; i++)
                 {
                     AsarEntry entry = archive.Entries[i];
@@ -3360,6 +3360,9 @@ namespace CodexPortable
                         windowsSandboxComposerStateEntries += EnsurePattern(archive, entry,
                             OfficialWindowsSandboxComposerStateText,
                             PortableWindowsSandboxComposerStateText, 1, true);
+                        windowsSandboxReadinessStateEntries += EnsurePattern(archive, entry,
+                            OfficialWindowsSandboxReadinessStateText,
+                            PortableWindowsSandboxReadinessStateText, 1, true);
                         portableUserDataResolverEntries += EnsurePattern(archive, entry,
                             OfficialPortableUserDataResolverText,
                             PortableUserDataResolverText);
@@ -3424,6 +3427,9 @@ namespace CodexPortable
                 if (windowsSandboxComposerStateEntries != 1)
                     throw new InvalidDataException(
                         "Electron Windows-sandbox composer state target is missing or ambiguous.");
+                if (windowsSandboxReadinessStateEntries != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox readiness state target is missing or ambiguous.");
 
                 List<OnboardingEntryTarget> onboardingEntries = FindOnboardingEntries(archive);
                 for (int i = 0; i < onboardingEntries.Count; i++)
@@ -3627,6 +3633,7 @@ namespace CodexPortable
                     int portableTryModelAvailabilityGateOccurrences = 0;
                     int portableTryModelUpgradeGateOccurrences = 0;
                     int portableWindowsSandboxComposerStateOccurrences = 0;
+                    int portableWindowsSandboxReadinessStateOccurrences = 0;
                     for (int i = 0; i < archive.Entries.Count; i++)
                     {
                         AsarEntry entry = archive.Entries[i];
@@ -3731,6 +3738,10 @@ namespace CodexPortable
                             CountIdentifierPattern(bytes, OfficialWindowsSandboxComposerStateText, entry);
                         int portableWindowsSandboxComposerStateCount =
                             CountIdentifierPattern(bytes, PortableWindowsSandboxComposerStateText, entry);
+                        int officialWindowsSandboxReadinessStateCount =
+                            CountIdentifierPattern(bytes, OfficialWindowsSandboxReadinessStateText, entry);
+                        int portableWindowsSandboxReadinessStateCount =
+                            CountIdentifierPattern(bytes, PortableWindowsSandboxReadinessStateText, entry);
                         if (officialBrandCount != 0 || officialSparkleGateCount != 0 || officialWorkerSparkleGateCount != 0 ||
                             officialUpdateMenuCount != 0 ||
                             officialUpdaterIdleStateCount != 0 ||
@@ -3751,6 +3762,7 @@ namespace CodexPortable
                             officialTryModelAvailabilityGateCount != 0 ||
                             officialTryModelUpgradeGateCount != 0 ||
                             officialWindowsSandboxComposerStateCount != 0 ||
+                            officialWindowsSandboxReadinessStateCount != 0 ||
                             portableBrandCount > 1 || portableSparkleGateCount > 1 || portableWorkerSparkleGateCount > 1 ||
                             portableUpdateMenuCount > 1 ||
                             portableUpdaterIdleStateCount > 1 ||
@@ -3773,7 +3785,8 @@ namespace CodexPortable
                             portableSunsetUpdateGateCount > 1 ||
                             portableTryModelAvailabilityGateCount > 1 ||
                             portableTryModelUpgradeGateCount > 1 ||
-                            portableWindowsSandboxComposerStateCount > 1) return false;
+                            portableWindowsSandboxComposerStateCount > 1 ||
+                            portableWindowsSandboxReadinessStateCount > 1) return false;
                         if (portableBrandCount == 0 && portableSparkleGateCount == 0 && portableWorkerSparkleGateCount == 0 &&
                             portableUpdateMenuCount == 0 &&
                             portableUpdaterIdleStateCount == 0 &&
@@ -3796,7 +3809,8 @@ namespace CodexPortable
                             portableSunsetUpdateGateCount == 0 &&
                             portableTryModelAvailabilityGateCount == 0 &&
                             portableTryModelUpgradeGateCount == 0 &&
-                            portableWindowsSandboxComposerStateCount == 0) continue;
+                            portableWindowsSandboxComposerStateCount == 0 &&
+                            portableWindowsSandboxReadinessStateCount == 0) continue;
                         if (!IntegrityMatches(entry, ComputeIntegrity(bytes, entry.BlockSize))) return false;
                         portableBrandOccurrences += portableBrandCount;
                         portableSparkleGateOccurrences += portableSparkleGateCount;
@@ -3841,6 +3855,8 @@ namespace CodexPortable
                             portableTryModelUpgradeGateCount;
                         portableWindowsSandboxComposerStateOccurrences +=
                             portableWindowsSandboxComposerStateCount;
+                        portableWindowsSandboxReadinessStateOccurrences +=
+                            portableWindowsSandboxReadinessStateCount;
                     }
                     if (portableBrandOccurrences != 1 || portableSparkleGateOccurrences != 1 ||
                         portableWorkerSparkleGateOccurrences != 1 ||
@@ -3862,7 +3878,8 @@ namespace CodexPortable
                         portableSunsetUpdateGateOccurrences != 1 ||
                         portableTryModelAvailabilityGateOccurrences != 1 ||
                         portableTryModelUpgradeGateOccurrences != 1 ||
-                        portableWindowsSandboxComposerStateOccurrences != 1) return false;
+                        portableWindowsSandboxComposerStateOccurrences != 1 ||
+                        portableWindowsSandboxReadinessStateOccurrences != 1) return false;
                     if (workspaceDependenciesSettingsFunctionOccurrences != 1 ||
                         officialWorkspaceDependenciesSettingsPanelGateOccurrences != 0 ||
                         portableWorkspaceDependenciesSettingsPanelGateOccurrences != 1) return false;
@@ -3911,41 +3928,25 @@ namespace CodexPortable
 
         private static List<OnboardingEntryTarget> FindOnboardingEntries(AsarArchive archive)
         {
-            if (TranslatedOnboardingAssetStems.Length != ExpectedTranslatedOnboardingLocaleEntries ||
-                ExpectedTranslatedOnboardingLocaleEntries + 1 != ExpectedOnboardingLocaleEntries)
-                throw new InvalidDataException("Electron onboarding locale inventory is invalid.");
-
             List<OnboardingEntryTarget> result = new List<OnboardingEntryTarget>();
-            for (int localeIndex = 0; localeIndex < TranslatedOnboardingAssetStems.Length; localeIndex++)
-            {
-                AsarEntry match = null;
-                for (int entryIndex = 0; entryIndex < archive.Entries.Count; entryIndex++)
-                {
-                    AsarEntry candidate = archive.Entries[entryIndex];
-                    if (!IsHashedWebviewAsset(candidate.Path,
-                            TranslatedOnboardingAssetStems[localeIndex])) continue;
-                    if (match != null)
-                        throw new InvalidDataException("Electron onboarding locale asset is ambiguous: " +
-                            TranslatedOnboardingAssetStems[localeIndex]);
-                    match = candidate;
-                }
-                if (match == null)
-                    throw new InvalidDataException("Electron onboarding locale asset is missing: " +
-                        TranslatedOnboardingAssetStems[localeIndex]);
-                OnboardingEntryTarget target = new OnboardingEntryTarget();
-                target.Entry = match;
-                target.ContainsDefaultMessages = false;
-                result.Add(target);
-            }
-
             AsarEntry onboardingPage = null;
             for (int i = 0; i < archive.Entries.Count; i++)
             {
                 AsarEntry candidate = archive.Entries[i];
-                if (!IsHashedWebviewAsset(candidate.Path, OnboardingPageAssetStem)) continue;
-                if (onboardingPage != null)
-                    throw new InvalidDataException("Electron onboarding default-message asset is ambiguous.");
-                onboardingPage = candidate;
+                if (!IsWebviewJavaScriptAsset(candidate.Path)) continue;
+                byte[] bytes = archive.ReadEntry(candidate);
+                if (HasOnboardingDefaultMessageKeys(bytes))
+                {
+                    if (onboardingPage != null)
+                        throw new InvalidDataException("Electron onboarding default-message asset is ambiguous.");
+                    onboardingPage = candidate;
+                    continue;
+                }
+                if (!HasOnboardingLocaleMessageKeys(bytes)) continue;
+                OnboardingEntryTarget localized = new OnboardingEntryTarget();
+                localized.Entry = candidate;
+                localized.ContainsDefaultMessages = false;
+                result.Add(localized);
             }
             if (onboardingPage == null)
                 throw new InvalidDataException("Electron onboarding default-message asset is missing.");
@@ -3953,10 +3954,31 @@ namespace CodexPortable
             defaultMessages.Entry = onboardingPage;
             defaultMessages.ContainsDefaultMessages = true;
             result.Add(defaultMessages);
-
-            if (result.Count != ExpectedOnboardingLocaleEntries)
-                throw new InvalidDataException("Electron onboarding locale count changed unexpectedly.");
             return result;
+        }
+
+        private static bool HasOnboardingLocaleMessageKeys(byte[] bytes)
+        {
+            byte[] rolePrefix = Encoding.UTF8.GetBytes("\"" +
+                OnboardingMessageIdPrefix + "roleOnlyWelcomeIntroduction\":");
+            byte[] welcomePrefix = Encoding.UTF8.GetBytes("\"" +
+                OnboardingMessageIdPrefix + "welcomeIntroduction\":");
+            return CountPattern(bytes, rolePrefix) == 1 && CountPattern(bytes, welcomePrefix) == 1;
+        }
+
+        private static bool HasOnboardingDefaultMessageKeys(byte[] bytes)
+        {
+            byte[] rolePrefix = Encoding.UTF8.GetBytes("roleOnlyWelcomeIntroduction:{id:`" +
+                OnboardingMessageIdPrefix + "roleOnlyWelcomeIntroduction`,defaultMessage:");
+            byte[] welcomePrefix = Encoding.UTF8.GetBytes("welcomeIntroduction:{id:`" +
+                OnboardingMessageIdPrefix + "welcomeIntroduction`,defaultMessage:");
+            return CountPattern(bytes, rolePrefix) == 1 && CountPattern(bytes, welcomePrefix) == 1;
+        }
+
+        private static bool IsWebviewJavaScriptAsset(string path)
+        {
+            return path.StartsWith(WebviewAssetPrefix, StringComparison.Ordinal) &&
+                path.EndsWith(".js", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsHashedWebviewAsset(string path, string stem)
@@ -3966,7 +3988,7 @@ namespace CodexPortable
             if (!path.StartsWith(prefix, StringComparison.Ordinal) ||
                 !path.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) return false;
             int hashLength = path.Length - prefix.Length - extension.Length;
-            if (hashLength != 8) return false;
+            if (hashLength < 1) return false;
             for (int i = prefix.Length; i < prefix.Length + hashLength; i++)
             {
                 char value = path[i];
@@ -4570,6 +4592,7 @@ namespace CodexPortable
                 string.Equals(officialText, OfficialTryModelUpgradeGateText, StringComparison.Ordinal) ||
                 string.Equals(officialText, OfficialWindowsSandboxSetupPendingGateText, StringComparison.Ordinal) ||
                 string.Equals(officialText, OfficialWindowsSandboxComposerStateText, StringComparison.Ordinal) ||
+                string.Equals(officialText, OfficialWindowsSandboxReadinessStateText, StringComparison.Ordinal) ||
                 string.Equals(officialText, OfficialBrowserPluginAvailabilityText, StringComparison.Ordinal) ||
                 string.Equals(officialText, OfficialChromePluginAvailabilityText, StringComparison.Ordinal) ||
                 string.Equals(officialText, OfficialComputerUsePluginAvailabilityText, StringComparison.Ordinal))
@@ -4819,6 +4842,9 @@ namespace CodexPortable
             if (string.Equals(text, OfficialWindowsSandboxComposerStateText, StringComparison.Ordinal) ||
                 string.Equals(text, PortableWindowsSandboxComposerStateText, StringComparison.Ordinal))
                 return OfficialWindowsSandboxComposerStateText;
+            if (string.Equals(text, OfficialWindowsSandboxReadinessStateText, StringComparison.Ordinal) ||
+                string.Equals(text, PortableWindowsSandboxReadinessStateText, StringComparison.Ordinal))
+                return OfficialWindowsSandboxReadinessStateText;
             if (string.Equals(text, OfficialWindowsSandboxSetupPendingGateText, StringComparison.Ordinal) ||
                 string.Equals(text, PortableWindowsSandboxSetupPendingGateText, StringComparison.Ordinal))
                 return OfficialWindowsSandboxSetupPendingGateText;
@@ -5332,7 +5358,7 @@ namespace CodexPortable
                     ReportStartupInitializationProgress(5, "检查 LF 发布包", "Checking LF release package",
                         "确认桌面程序与 API 配置", "Checking the desktop payload and API configuration");
                     result.PayloadPresent = result.SupportedArchitecture &&
-                        (File.Exists(layout.OfficialAppExe) || result.BundledPayloadAvailable);
+                        (PortableBranding.IsPrepared(layout) || result.BundledPayloadAvailable);
                     result.ApiConfigured = ProviderConfiguration.HasCompleteApiConfiguration(layout);
                     return result;
                 });
@@ -5362,7 +5388,7 @@ namespace CodexPortable
                     details.Text = string.Empty;
                     return;
                 }
-                if (initialization.BundledPayloadAvailable && !File.Exists(layout.OfficialAppExe))
+                if (initialization.BundledPayloadAvailable && !PortableBranding.IsPrepared(layout))
                 {
                     RefreshStatus(LauncherLocale.T("就绪", "Ready"));
                     return;
@@ -5526,7 +5552,7 @@ namespace CodexPortable
                     "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (!File.Exists(layout.OfficialAppExe) && !PortableBundle.HasInstallPackages(layout))
+            if (!PortableBranding.IsPrepared(layout) && !PortableBundle.HasInstallPackages(layout))
             {
                 MessageBox.Show(LauncherLocale.T("未找到完整的 LF 发布包。", "The complete LF release package was not found."), "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -5539,7 +5565,7 @@ namespace CodexPortable
                 return;
             }
             bool needsCommonRuntime = !PortableBundle.CommonPayloadComplete(layout);
-            bool needsDesktopPackage = !File.Exists(layout.OfficialAppExe);
+            bool needsDesktopPackage = !PortableBranding.IsPrepared(layout);
             startWorkflowRunning = true;
             SetBusy(true, null);
             BeginLaunchProgressPlan(needsCommonRuntime, needsDesktopPackage);
@@ -9225,15 +9251,40 @@ namespace CodexPortable
         {
             if (!File.Exists(package)) throw new FileNotFoundException("MSIX not found.", package);
             layout.EnsureDirectories();
-            string staging = Path.Combine(layout.Updates, "release-" +
+            string transaction = Path.Combine(layout.Updates, "release-" +
                 Guid.NewGuid().ToString("N").Substring(0, 10));
+            string staging = Path.Combine(transaction, "stage");
+            string backup = Path.Combine(transaction, "previous");
+            string failed = Path.Combine(transaction, "failed");
             string destination = expectedArchitecture == PortableArchitecture.X64 ?
                 Path.Combine(layout.DataRoot, "app", "current") :
                 Path.Combine(layout.Tools, "desktop-payloads", "arm64", "current");
+            bool existingMoved = false;
+            bool existingWasDirectory = false;
+            bool newActivated = false;
+            bool retainTransaction = false;
             try
             {
-                if (Directory.Exists(destination) || File.Exists(destination))
-                    throw new IOException("Release payload destination already exists: " + destination);
+                // The transaction name is generated locally, but a pre-existing
+                // reparse point must never turn extraction or cleanup into an
+                // operation outside CodexData\updates.
+                AssertNoReparseAncestry(transaction, layout.Updates);
+                FileAttributes transactionAttributes;
+                if (TryGetExistingPathAttributes(transaction, out transactionAttributes))
+                {
+                    if ((transactionAttributes & FileAttributes.Directory) == 0)
+                        throw new IOException("Release payload transaction is not a directory: " + transaction);
+                }
+                else
+                {
+                    Directory.CreateDirectory(transaction);
+                }
+                AssertNoReparseAncestry(transaction, layout.Updates);
+                FileAttributes stagingAttributes;
+                if (TryGetExistingPathAttributes(staging, out stagingAttributes) &&
+                    (stagingAttributes & FileAttributes.Directory) == 0)
+                    throw new IOException("Release payload staging is not a directory: " + staging);
+                AssertNoReparseAncestry(staging, layout.Updates);
                 if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.ValidatingDesktopPackage));
                 string payload;
                 PackageInfo info = ExtractPreparedDesktopPayload(package, staging,
@@ -9253,9 +9304,22 @@ namespace CodexPortable
                 // atomic directory activation below.
                 string parent = Path.GetDirectoryName(destination);
                 if (string.IsNullOrEmpty(parent)) throw new InvalidDataException("Release payload destination has no parent.");
-                Directory.CreateDirectory(parent);
-                Directory.Move(payload, destination);
-                // Directory.Move is same-volume and atomic. The source was fully
+                AssertNoReparseAncestry(parent, layout.DataRoot);
+                FileAttributes existingAttributes;
+                if (TryGetExistingPathAttributes(destination, out existingAttributes))
+                {
+                    AssertNoReparseAncestry(destination, layout.DataRoot);
+                    existingWasDirectory = (existingAttributes & FileAttributes.Directory) != 0;
+                    if (!existingWasDirectory && !IsRegularFile(destination))
+                        throw new IOException("Release payload destination is not a regular package path: " +
+                            destination);
+                    if (existingWasDirectory) AssertExtractedTreeNoReparse(destination);
+                    MoveReleasePayloadPath(destination, backup, existingWasDirectory);
+                    existingMoved = true;
+                }
+                MoveReleasePayloadPath(payload, destination, true);
+                newActivated = true;
+                // MoveFileW is a same-volume atomic rename. The source was fully
                 // verified immediately before activation, so re-reading both large
                 // EXEs and app.asar at the destination cannot add assurance here.
                 // Verify only that the activated tree contains its required anchor.
@@ -9265,15 +9329,105 @@ namespace CodexPortable
                 if (progress != null) progress(new FirstLaunchProgress(FirstLaunchPreparationStage.DesktopPayloadReady));
                 return info;
             }
-            catch
+            catch (Exception activationError)
             {
-                if (Directory.Exists(destination)) IOUtil.DeleteDirectoryWithin(destination, layout.DataRoot);
+                List<Exception> rollbackErrors = new List<Exception>();
+                if (newActivated)
+                {
+                    try { MoveReleasePayloadPath(destination, failed, true); }
+                    catch (Exception ex) { rollbackErrors.Add(ex); }
+                }
+                if (existingMoved)
+                {
+                    try
+                    {
+                        FileAttributes occupiedAttributes;
+                        if (TryGetExistingPathAttributes(destination, out occupiedAttributes))
+                            throw new IOException("Release payload rollback destination is occupied: " +
+                                destination);
+                        MoveReleasePayloadPath(backup, destination, existingWasDirectory);
+                    }
+                    catch (Exception ex) { rollbackErrors.Add(ex); }
+                }
+                if (rollbackErrors.Count != 0)
+                {
+                    retainTransaction = true;
+                    List<Exception> failures = new List<Exception>();
+                    failures.Add(activationError);
+                    failures.AddRange(rollbackErrors);
+                    throw new IOException("Desktop payload installation failed and rollback needs inspection at " +
+                        transaction + ".", new AggregateException(failures));
+                }
                 throw;
             }
             finally
             {
-                if (Directory.Exists(staging)) IOUtil.DeleteDirectoryWithin(staging, layout.Updates);
+                if (!retainTransaction)
+                {
+                    try
+                    {
+                        FileAttributes transactionAttributes;
+                        if (TryGetExistingPathAttributes(transaction, out transactionAttributes))
+                        {
+                            if ((transactionAttributes & FileAttributes.Directory) == 0)
+                                throw new IOException("Release payload transaction is not a directory: " + transaction);
+                            AssertNoReparseAncestry(transaction, layout.Updates);
+                            IOUtil.DeleteDirectoryWithin(transaction, layout.Updates);
+                        }
+                    }
+                    catch
+                    {
+                        // Cleanup is best effort.  Preserve the activation or
+                        // rollback exception and leave the verified transaction
+                        // for a later repair instead of reporting a false failure.
+                        retainTransaction = true;
+                    }
+                }
             }
+        }
+
+        private static bool TryGetExistingPathAttributes(string path,
+            out FileAttributes attributes)
+        {
+            uint raw = NativeMethods.GetFileAttributes(ToExtendedPath(path));
+            if (raw != NativeMethods.InvalidFileAttributes)
+            {
+                attributes = (FileAttributes)raw;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Release payload paths cannot be reparse points: " + path);
+                return true;
+            }
+            int error = Marshal.GetLastWin32Error();
+            attributes = 0;
+            if (error == 2 || error == 3) return false;
+            throw new Win32Exception(error, "Release payload path could not be inspected: " + path);
+        }
+
+        private static void MoveReleasePayloadPath(string source, string destination,
+            bool directory)
+        {
+            FileAttributes sourceAttributes;
+            if (!TryGetExistingPathAttributes(source, out sourceAttributes))
+                throw new IOException("Release payload move source is missing: " + source);
+            if (((sourceAttributes & FileAttributes.Directory) != 0) != directory)
+                throw new IOException("Release payload move source has the wrong path type: " + source);
+            FileAttributes destinationAttributes;
+            if (TryGetExistingPathAttributes(destination, out destinationAttributes))
+                throw new IOException("Release payload move destination already exists: " + destination);
+            string parent = Path.GetDirectoryName(destination);
+            FileAttributes parentAttributes;
+            if (string.IsNullOrEmpty(parent) ||
+                !TryGetExistingPathAttributes(parent, out parentAttributes) ||
+                (parentAttributes & FileAttributes.Directory) == 0)
+                throw new DirectoryNotFoundException("Release payload move destination parent is missing: " +
+                    destination);
+            if (!NativeMethods.MoveFile(ToExtendedPath(source), ToExtendedPath(destination)))
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Release payload move failed: " + source + " -> " + destination);
+            // MoveFileW succeeds only after the same-volume rename has committed.
+            // Do not add a second existence check here: a transient inspection
+            // failure after a successful move must still be treated as moved so
+            // the transaction can roll it back instead of orphaning the payload.
         }
     }
 }
