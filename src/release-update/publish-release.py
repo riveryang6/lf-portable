@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload architecture-specific LF Portable archives with GitHub CLI."""
+"""Upload architecture-specific LF Portable executables with GitHub CLI."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Publish LFPortable-x64.zip and LFPortable-arm64.zip with gh.")
+    parser = argparse.ArgumentParser(
+        description="Publish LFPortable-x64.exe and LFPortable-arm64.exe with gh."
+    )
     parser.add_argument("--release-root", required=True, type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--repository", default="riveryang6/lf-portable")
@@ -66,15 +68,22 @@ def main() -> int:
         return 1
 
     release_root = args.release_root.expanduser().resolve()
-    archives = [release_root / f"LFPortable-{architecture}.zip" for architecture in ("x64", "arm64")]
-    missing = [str(path) for path in archives if not path.is_file()]
+    executables = [
+        release_root / f"LFPortable-{architecture}.exe"
+        for architecture in ("x64", "arm64")
+    ]
+    missing = [str(path) for path in executables if not path.is_file()]
     if missing:
-        print("publish-release.py: release archive(s) are missing: " + ", ".join(missing), file=sys.stderr)
+        print(
+            "publish-release.py: release executable(s) are missing: "
+            + ", ".join(missing),
+            file=sys.stderr,
+        )
         return 1
 
     try:
         gh = find_gh()
-        archive_arguments = [gh_file_argument(gh, archive) for archive in archives]
+        executable_arguments = [gh_file_argument(gh, executable) for executable in executables]
     except ValueError as error:
         print(f"publish-release.py: {error}", file=sys.stderr)
         return 1
@@ -84,7 +93,7 @@ def main() -> int:
         "release",
         "create",
         f"v{args.version}",
-        *archive_arguments,
+        *executable_arguments,
         "--repo",
         args.repository,
         "--title",

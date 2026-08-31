@@ -1,11 +1,13 @@
-Codex Desktop Portable USB
+Codex Desktop Portable
 ==========================
 
-Root layout
------------
-The visible USB root contains exactly:
-  CodexPortable.exe
-  CodexData\
+Single-file layout
+------------------
+The published `LFPortable-x64.exe` or `LFPortable-arm64.exe` is the only
+program file required at download time. Rename it to `CodexPortable.exe` when
+placing it at a portable root, or let the USB synchronizer do that. On first
+start the bootstrapper creates `CodexData\` beside the EXE and extracts only
+the release inputs needed for the current Windows architecture.
 
 Windows may create hidden system metadata such as System Volume Information.
 
@@ -112,21 +114,23 @@ Bundled tools
 Updates
 -------
 LF releases are GitHub-only and contain LF-branded artifacts. Each stable
-release has two offline assets: `LFPortable-x64.zip` and
-`LFPortable-arm64.zip`. Download the asset matching the Windows host. Each
-asset contains the common portable runtime and one official MSIX, with no
-release descriptor, package manifest, checkpoint, or whole-tree digest record.
+release has two offline assets: `LFPortable-x64.exe` and
+`LFPortable-arm64.exe`. Download the asset matching the Windows host. Each
+asset contains the common portable runtime and one official MSIX internally,
+with no pre-created `CodexData` directory, release descriptor, package
+manifest, checkpoint, or whole-tree digest record.
 The launcher still validates the official package signature, OpenAI package
 identity, architecture, and safe archive paths before installing it. Plugin
 auto-update and in-product program update transactions are disabled; replace
 the offline package and start it manually for a new release.
 
-An architecture package contains the bootstrapper, three launcher cores, two
+An architecture EXE contains the bootstrapper, three launcher cores, two
 managed documentation files, the common runtime ZIP, and its matching MSIX.
 The derived desktop payload, runtime, offline marketplace, required plugin
-cache, and transaction staging are recreated from those packages on the next
-manual start. USB sync removes only those derived paths and retired descriptor
-files; other CodexData\data, logs, and unknown user entries are preserved.
+cache, and transaction staging are recreated from those inputs on the first
+manual start or after an upgrade. USB sync replaces only the root EXE; the
+bootstrapper performs the data-preserving upgrade, leaving `CodexData\data`,
+logs, and unknown user entries intact.
 
 Important limits
 ----------------

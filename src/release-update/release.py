@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble architecture-specific, offline LF Portable release packages."""
+"""Assemble architecture-specific, self-extracting LF Portable executables."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import sys
+import tempfile
 import zipfile
 
 
@@ -18,7 +19,6 @@ VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 ARCHITECTURES = ("x64", "arm64")
 
 COMMON_FILES = (
-    ("CodexPortable.exe", "launcher"),
     ("CodexData/README.txt", "documentation"),
     ("CodexData/THIRD_PARTY.txt", "base"),
     ("CodexData/tools/launchers/CodexPortable.x86.exe", "launcher"),
@@ -30,7 +30,7 @@ COMMON_FILES = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create offline, architecture-specific LF Portable release ZIPs."
+        description="Create offline, architecture-specific LF Portable EXE releases."
     )
     parser.add_argument("--base-root", required=True, type=Path)
     parser.add_argument("--launcher-root", required=True, type=Path)
@@ -103,30 +103,48 @@ def source_files(base_root: Path, launcher_root: Path, architecture: str,
     return result
 
 
-def archive_release(release_root: Path, archive_path: Path, files: list[tuple[str, Path]]) -> None:
+def archive_payload(payload_root: Path, archive_path: Path,
+                    files: list[tuple[str, Path]]) -> None:
     with zipfile.ZipFile(archive_path, mode="x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
         for relative_path, _ in files:
             # Packages are already compressed; storing them avoids a second multi-GB pass.
             compression = zipfile.ZIP_STORED if relative_path.endswith((".zip", ".msix")) else zipfile.ZIP_DEFLATED
-            archive.write(release_root / relative_path, arcname=relative_path, compress_type=compression)
+            archive.write(payload_root / relative_path, arcname=relative_path, compress_type=compression)
+
+
+def append_payload(bootstrapper: Path, payload_archive: Path,
+                   output_path: Path) -> None:
+    """Create a self-extracting EXE without loading the multi-gigabyte payload."""
+
+    with bootstrapper.open("rb") as source, output_path.open("xb") as destination:
+        shutil.copyfileobj(source, destination, length=1024 * 1024)
+        with payload_archive.open("rb") as payload:
+            shutil.copyfileobj(payload, destination, length=4 * 1024 * 1024)
 
 
 def create_architecture_release(
     base_root: Path, launcher_root: Path, output_root: Path, architecture: str,
     version: str,
-) -> tuple[Path, Path]:
+) -> Path:
     files = source_files(base_root, launcher_root, architecture, version)
-    release_root = output_root / f"LFPortable-{architecture}"
-    archive_path = output_root / f"LFPortable-{architecture}.zip"
-    if release_root.exists() or archive_path.exists():
-        raise ValueError(f"release output already exists for {architecture}: {release_root}")
-    release_root.mkdir(parents=True)
-    for relative_path, source in files:
-        destination = release_root / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-    archive_release(release_root, archive_path, files)
-    return release_root, archive_path
+    bootstrapper = require_regular_file(
+        launcher_root / "CodexPortable.exe", "launcher bootstrapper"
+    )
+    output_path = output_root / f"LFPortable-{architecture}.exe"
+    with tempfile.TemporaryDirectory(
+        dir=str(output_root.parent), prefix=f".{output_root.name}-{architecture}-"
+    ) as temporary:
+        temporary_root = Path(temporary)
+        payload_root = temporary_root / "payload"
+        payload_root.mkdir()
+        for relative_path, source in files:
+            destination = payload_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        payload_archive = temporary_root / "payload.zip"
+        archive_payload(payload_root, payload_archive, files)
+        append_payload(bootstrapper, payload_archive, output_path)
+    return output_path
 
 
 def create_release(base_root: Path, launcher_root: Path, output_root: Path, version: str,
@@ -145,11 +163,10 @@ def create_release(base_root: Path, launcher_root: Path, output_root: Path, vers
     output_root.mkdir(parents=True)
     try:
         for architecture in architectures:
-            release_root, archive_path = create_architecture_release(
+            output_path = create_architecture_release(
                 base_root, launcher_root, output_root, architecture, version
             )
-            print(f"{architecture} release root: {release_root}")
-            print(f"{architecture} archive: {archive_path}")
+            print(f"{architecture} executable: {output_path}")
     except Exception:
         shutil.rmtree(output_root, ignore_errors=True)
         raise

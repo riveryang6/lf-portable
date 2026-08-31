@@ -1,6 +1,6 @@
 # Portable Dependency Audit
 
-This audit covers the common runtime archive used by LF Portable 1.4.24.5:
+This audit covers the common runtime archive used by LF Portable 1.4.24.6:
 `release/CodexData/packages/LFPortable-common.zip`. The archive is deliberately
 self-contained. The launcher selects the copies below from the portable tree
 and does not depend on a host installation, registry entry, or host `PATH` for
@@ -55,14 +55,17 @@ portable contract.
 
 The old combined archive contained both desktop MSIX files and approached the
 2 GiB class limit. The release builder now emits architecture-specific offline
-packages: `LFPortable-x64.zip` and `LFPortable-arm64.zip`. Each package carries
-the common ZIP and only its matching official MSIX, while retaining all
+executables: `LFPortable-x64.exe` and `LFPortable-arm64.exe`. Each executable
+carries the common ZIP and only its matching official MSIX, while retaining all
 portable feature libraries for clean-machine and Sandbox use.
 
-The current bundled MSIX manifests are `OpenAI.Codex` version `26.825.5331.0`
-for both x64 and ARM64. The packages were retrieved from the official
-Microsoft Store delivery service on 2026-08-29 and their manifests and
-signatures were inspected before release assembly.
+The current bundled MSIX manifests are `OpenAI.Codex` version `26.825.6671.0`
+for both x64 and ARM64. Microsoft Store product `9PLM9XGG6VKS` was resolved
+through `store.rg-adguard.net` on 2026-08-30 because the Store did not expose a
+direct offline link. The resulting files were downloaded from
+`tlu.dl.delivery.mp.microsoft.com`; the third-party site is not a distribution
+or trust source. Their manifests, architectures, and Authenticode signatures
+were inspected before release assembly.
 
 No library is downloaded, installed, or updated during first launch. The
 supported USB/Sandbox release is therefore fully offline; a CDN is an optional

@@ -1,9 +1,10 @@
 # LF Portable - Codex Desktop
 
-LF Portable is a Windows launcher and compact release layout for Codex
-Desktop. Packages, executable files, runtimes, configuration, SQLite state,
-keys, profile data, and recovery inputs stay in the portable root. A disposable
-fixed-disk session cache is optional and never a startup prerequisite.
+LF Portable is a single-file Windows launcher for Codex Desktop. The published
+EXE carries the compact release inputs internally; on first start it creates
+`CodexData` beside itself and keeps packages, runtimes, configuration, SQLite
+state, keys, profile data, and recovery inputs there. A disposable fixed-disk
+session cache is optional and never a startup prerequisite.
 
 ## Repository Layout
 
@@ -33,21 +34,25 @@ src/portable-launcher/build-launcher.sh \
 Use a prepared, non-USB base root to assemble a release. It supplies the
 portable documentation, notices, compact common runtime ZIP, and the official
 x64 and ARM64 MSIX files. It must not include expanded desktop payloads, user
-profiles, credentials, logs, or a derived plugin cache.
+profiles, credentials, logs, or a derived plugin cache. When Microsoft Store
+does not expose an offline MSIX directly, `store.rg-adguard.net` may only be
+used to resolve the link; the downloaded file must come from Microsoft's
+delivery domain and pass the launcher's signature, identity, and architecture
+checks.
 
 ```bash
 src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.5
+  --version 1.4.24.6
 ```
 
-The command creates two runnable directories and matching offline archives:
-`LFPortable-x64/` with `LFPortable-x64.zip`, and `LFPortable-arm64/` with
-`LFPortable-arm64.zip`. Each archive contains the common runtime and exactly
-one official MSIX, so a package stays below the 2 GB class limit. Use a new
-output directory for each package attempt.
+The command creates two direct, architecture-specific executables:
+`LFPortable-x64.exe` and `LFPortable-arm64.exe`. Each EXE carries the common
+runtime and exactly one official MSIX in its internal payload, so no
+`CodexData` directory is present beside a fresh download. Use a new output
+directory for each package attempt.
 
 The retired Windows-script builder, release staging, package-manifest, and
 publisher workflows are intentionally absent. They were replaced by the Bash
@@ -73,12 +78,13 @@ keeps the desktop visible until it is closed:
 
 ```bash
 src/release-update/sandbox-smoke.sh \
-  --release-root /path/to/release-parent/LFPortable-x64
+  --release-root /path/to/release-parent/release \
+  --architecture x64
 ```
 
 Before closing Sandbox, confirm that the LF launcher and Codex Desktop window
 actually opened and that the first-run model announcement and `Try model` CTA
-did not appear. Use the `LFPortable-arm64` directory instead on an ARM64 host.
+did not appear. Use `--architecture arm64` on an ARM64 host.
 
 Deploy the same release to the real USB drive from WSL. The helper uses WSL
 interop for the Windows volume and process APIs, and `robocopy` copies the
@@ -91,7 +97,8 @@ preserved.
 
 ```bash
 src/release-update/sync-usb.sh \
-  --source-root /path/to/release-parent/LFPortable-x64 \
+  --source-root /path/to/release-parent/release \
+  --architecture x64 \
   --usb-root "/mnt/<CODEX_USB-drive-letter>" \
   --execute
 ```
@@ -113,20 +120,20 @@ these two checks.
 
 ## Publish
 
-After the required real Windows observations succeed for the exact package,
+After the required real Windows observations succeed for the exact executable,
 publish from WSL with the GitHub CLI. When `CODEX_USB` is not mounted, the
 Sandbox observation is the required GUI acceptance and the USB observation is
 skipped as described above. A stable release has two program assets:
-`LFPortable-x64.zip` and `LFPortable-arm64.zip`.
+`LFPortable-x64.exe` and `LFPortable-arm64.exe`.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.5"
-git tag -a v1.4.24.5 -m "LF Portable 1.4.24.5"
-git push origin HEAD:main refs/tags/v1.4.24.5:refs/tags/v1.4.24.5
+git commit -m "Release LF Portable 1.4.24.6"
+git tag -a v1.4.24.6 -m "LF Portable 1.4.24.6"
+git push origin HEAD:main refs/tags/v1.4.24.6:refs/tags/v1.4.24.6
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.5
+  --version 1.4.24.6
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

@@ -32,6 +32,10 @@ RELEASE_COMMON_FILES = (
     "CodexData/tools/launchers/CodexPortable.arm64.exe",
     "CodexData/packages/LFPortable-common.zip",
 )
+DIRECT_RELEASE_NAMES = {
+    "x64": "LFPortable-x64.exe",
+    "arm64": "LFPortable-arm64.exe",
+}
 
 # These fixed paths are generated from package files on the next Windows start.
 # Marketplace and plugin-cache paths are discovered from the bundled catalog
@@ -109,6 +113,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--source-root", required=True, help="release directory to copy")
     parser.add_argument("--usb-root", required=True, help="destination below CODEX_USB")
+    parser.add_argument(
+        "--architecture",
+        choices=("x64", "arm64"),
+        help="select an executable when --source-root contains both architecture builds",
+    )
     parser.add_argument(
         "--wait-for-portable-exit-seconds",
         default=0,
@@ -432,8 +441,43 @@ def run_robocopy(
     return completed.returncode
 
 
-def release_sources(source: Path) -> list[tuple[str, Path]]:
+def release_sources(source: Path, architecture: str | None = None) -> list[tuple[str, Path]]:
     reject_reparse_path(source, "source root")
+    if source.is_file():
+        source_name = source.name.casefold()
+        accepted_names = {name.casefold() for name in DIRECT_RELEASE_NAMES.values()}
+        if source_name != "codexportable.exe" and source_name not in accepted_names:
+            raise SyncError(
+                "a direct release file must be named LFPortable-x64.exe, "
+                "LFPortable-arm64.exe, or CodexPortable.exe"
+            )
+        candidates = [source]
+    elif source.is_dir():
+        candidates = [
+            source / name
+            for name in DIRECT_RELEASE_NAMES.values()
+            if (source / name).exists()
+        ]
+    else:
+        candidates = []
+    if candidates:
+        if architecture is not None:
+            expected = DIRECT_RELEASE_NAMES[architecture]
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.name.casefold() in {expected.casefold(), "codexportable.exe"}
+            ]
+        if len(candidates) != 1:
+            raise SyncError(
+                "the direct release source must contain exactly one architecture executable; "
+                "use --architecture when both LFPortable-x64.exe and LFPortable-arm64.exe are present"
+            )
+        executable = require_regular_file(candidates[0], "direct release executable")
+        return [("CodexPortable.exe", executable)]
+
+    if not source.is_dir():
+        raise SyncError(f"--source-root is missing or is not a release directory: {source}")
     package_directory = source / "CodexData" / "packages"
     reject_reparse_path(package_directory, "source package directory")
     desktop_packages = sorted(package_directory.glob("LFPortable-*.msix"))
@@ -477,11 +521,7 @@ def marketplace_names_from_archive(package: Path, prefix: str) -> set[str]:
                 if not name.startswith(prefix) or not name.endswith(suffix):
                     continue
                 catalog = name[len(prefix) : -len(suffix)]
-                if not catalog or "/" in catalog or catalog in {".", ".."}:
-                    raise SyncError(
-                        f"release archive has an invalid marketplace catalog path: {raw_name}"
-                    )
-                if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", catalog) is None:
+                if not is_safe_marketplace_name(catalog):
                     raise SyncError(
                         f"release archive has an unsafe marketplace catalog name: {catalog}"
                     )
@@ -491,6 +531,25 @@ def marketplace_names_from_archive(package: Path, prefix: str) -> set[str]:
     if not names:
         raise SyncError(f"release archive has no marketplace catalog: {package}")
     return names
+
+
+def is_safe_marketplace_name(value: str) -> bool:
+    """Match the launcher's catalog path rules before deriving USB paths."""
+
+    if (
+        not value
+        or len(value) > 128
+        or value in {".", ".."}
+        or value.endswith((".", " "))
+        or re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value) is None
+    ):
+        return False
+    stem = value.split(".", 1)[0].upper()
+    if stem in {"CON", "PRN", "AUX", "NUL", "CLOCK$"}:
+        return False
+    if len(stem) == 4 and stem[:3] in {"COM", "LPT"} and stem[3] in "123456789":
+        return False
+    return True
 
 
 def release_catalogs(copied_files: list[tuple[str, Path]]) -> set[str]:
@@ -586,13 +645,39 @@ def copy_without_deleting(files: list[tuple[str, Path]], target: Path) -> None:
         shutil.copy2(source_file, destination)
 
 
+def copy_direct_executable(source: Path, target: Path) -> None:
+    """Install one large EXE through a same-volume temporary file."""
+
+    destination = target / "CodexPortable.exe"
+    reject_reparse_path(target, "USB root")
+    reject_reparse_path(destination, "USB bootstrapper destination")
+    temporary_name: str | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".CodexPortable-", suffix=".copying", dir=str(target)
+        )
+        with os.fdopen(descriptor, "wb") as output, source.open("rb") as input_file:
+            shutil.copyfileobj(input_file, output, length=4 * 1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        shutil.copystat(source, temporary_name)
+        os.replace(temporary_name, destination)
+        temporary_name = None
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+
+
 def execute(args: argparse.Namespace) -> None:
     source = Path(os.path.abspath(local_path(args.source_root)))
     target = Path(os.path.abspath(local_path(args.usb_root)))
     reject_reparse_path(source, "source root")
     reject_reparse_path(target, "USB root")
-    if not source.is_dir():
-        raise SyncError(f"--source-root is missing or is not a directory: {args.source_root}")
+    if not source.is_file() and not source.is_dir():
+        raise SyncError(f"--source-root is missing or is not a release path: {args.source_root}")
     if target.exists() and not target.is_dir():
         raise SyncError(f"--usb-root is a file or non-directory: {args.usb_root}")
 
@@ -601,17 +686,37 @@ def execute(args: argparse.Namespace) -> None:
     # not a destination reached by following a link.
     if paths_overlap(source, target):
         raise SyncError("--source-root and --usb-root must be distinct, non-overlapping directories")
-    files = release_sources(source)
-    catalogs = release_catalogs(files)
-
-    source_windows_path = windows_path(args.source_root, source)
+    files = release_sources(source, args.architecture)
+    direct_source = len(files) == 1 and files[0][0] == "CodexPortable.exe"
+    catalogs = set() if direct_source else release_catalogs(files)
+    source_directory = source if source.is_dir() else source.parent
+    source_windows_input = args.source_root if source.is_dir() else str(source.parent)
+    source_windows_path = windows_path(source_windows_input, source_directory)
     target_windows_path = windows_path(args.usb_root, target)
     ensure_codex_usb_volume(target_windows_path)
     assert target_windows_path is not None
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
     validate_target_paths(target, files)
 
-    if source_windows_path is not None and shutil.which("robocopy.exe") is not None:
+    if direct_source:
+        # A bundled EXE owns its embedded release inputs. Replacing only this
+        # file lets the bootstrapper make the next upgrade atomically while it
+        # preserves the user's CodexData state and derives current runtime files.
+        copy_direct_executable(files[0][1], target)
+        emit(
+            {
+                "action": "synced",
+                "copy": "shutil.copy2",
+                "execute": True,
+                "file_count": 1,
+                "removed_derived_paths": [],
+                "source_root": str(source),
+                "usb_root": str(target),
+            }
+        )
+        return
+
+    if not direct_source and source_windows_path is not None and shutil.which("robocopy.exe") is not None:
         exit_codes = []
         for relative_path, _ in files:
             wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
@@ -658,9 +763,9 @@ def main() -> int:
         emit(
             {
                 "action": "plan",
-                "copy": "architecture-specific release files via robocopy when Windows paths are available; shutil.copy2 otherwise",
+                "copy": "the selected architecture EXE; legacy structured release roots use robocopy when available",
                 "execute": False,
-                "file_count": len(RELEASE_COMMON_FILES) + 1,
+                "file_count": 1,
                 "source_root": args.source_root,
                 "target_data": "existing target entries are preserved",
                 "usb_root": args.usb_root,

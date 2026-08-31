@@ -6,12 +6,17 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: build-launcher.sh --output-root DIR [--dotnet PATH] [--framework-dir DIR]
+       [--payload-archive ZIP --bundle-output EXE]
 
 Builds:
   DIR/CodexPortable.exe
   DIR/CodexData/tools/launchers/CodexPortable.x86.exe
   DIR/CodexData/tools/launchers/CodexPortable.x64.exe
   DIR/CodexData/tools/launchers/CodexPortable.arm64.exe
+
+When --payload-archive and --bundle-output are supplied together, also appends
+the prepared CodexData payload ZIP to the x86 bootstrapper. The resulting EXE
+is a self-extracting, architecture-specific portable release.
 EOF
 }
 
@@ -78,6 +83,8 @@ build_target() {
 output_root=''
 dotnet_path=''
 framework_dir=''
+payload_archive=''
+bundle_output=''
 while [[ $# -gt 0 ]]; do
     case $1 in
         --output-root)
@@ -95,6 +102,16 @@ while [[ $# -gt 0 ]]; do
             framework_dir=$2
             shift 2
             ;;
+        --payload-archive)
+            [[ $# -ge 2 ]] || fail '--payload-archive requires a ZIP path'
+            payload_archive=$2
+            shift 2
+            ;;
+        --bundle-output)
+            [[ $# -ge 2 ]] || fail '--bundle-output requires an EXE path'
+            bundle_output=$2
+            shift 2
+            ;;
         --help|-h)
             usage
             exit 0
@@ -110,6 +127,11 @@ done
     usage >&2
     fail '--output-root is required'
 }
+if [[ -n $payload_archive || -n $bundle_output ]]; then
+    [[ -n $payload_archive && -n $bundle_output ]] ||
+        fail '--payload-archive and --bundle-output must be supplied together'
+    require_file "$payload_archive"
+fi
 
 if [[ -z $dotnet_path ]]; then
     dotnet_path=$(command -v dotnet || true)
@@ -168,3 +190,19 @@ build_target 'ARM64 launcher' "$core_source" arm64 \
     "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe"
 
 printf 'Built launcher outputs under %s\n' "$output_root"
+
+if [[ -n $payload_archive ]]; then
+    payload_archive=$(cd -- "$(dirname -- "$payload_archive")" && pwd -P)/$(basename -- "$payload_archive")
+    bundle_parent=$(dirname -- "$bundle_output")
+    mkdir -p -- "$bundle_parent"
+    bundle_parent=$(cd -- "$bundle_parent" && pwd -P)
+    bundle_output="$bundle_parent/$(basename -- "$bundle_output")"
+    [[ ! -e $bundle_output ]] || fail "Bundle output already exists: $bundle_output"
+    if ! cp -- "$output_root/CodexPortable.exe" "$bundle_output" ||
+        ! dd if="$payload_archive" of="$bundle_output" bs=4M iflag=fullblock \
+            oflag=append conv=notrunc status=none; then
+        rm -f -- "$bundle_output"
+        fail "Could not create bundled executable: $bundle_output"
+    fi
+    printf 'Built bundled executable at %s\n' "$bundle_output"
+fi

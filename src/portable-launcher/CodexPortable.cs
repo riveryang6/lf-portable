@@ -27,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.5")]
-[assembly: AssemblyFileVersion("1.4.24.5")]
+[assembly: AssemblyVersion("1.4.24.6")]
+[assembly: AssemblyFileVersion("1.4.24.6")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -45,6 +45,7 @@ namespace CodexPortable
                 NativeMethods.SemNoGpFaultErrorBox);
             string rootOverride = null;
             string rootTokenOverride = null;
+            string bootstrapperPathOverride = null;
             int bootstrapperProcessId = 0;
             List<string> forwardedArgs = new List<string>();
             for (int i = 0; i < args.Length; i++)
@@ -79,15 +80,31 @@ namespace CodexPortable
                         CultureInfo.InvariantCulture, out bootstrapperProcessId) || bootstrapperProcessId <= 0)
                         return 41;
                 }
+                else if (string.Equals(args[i], "--bootstrapper-path", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 >= args.Length) return 41;
+                    bootstrapperPathOverride = args[++i];
+                }
+                else if (args[i].StartsWith("--bootstrapper-path=", StringComparison.OrdinalIgnoreCase))
+                {
+                    bootstrapperPathOverride = args[i].Substring("--bootstrapper-path=".Length);
+                    if (string.IsNullOrEmpty(bootstrapperPathOverride)) return 41;
+                }
                 else forwardedArgs.Add(args[i]);
             }
             args = forwardedArgs.ToArray();
-            if ((!string.IsNullOrEmpty(rootOverride) || !string.IsNullOrEmpty(rootTokenOverride)) &&
-                bootstrapperProcessId <= 0) return 41;
+            bool hasBootstrapContext = !string.IsNullOrEmpty(rootOverride) ||
+                !string.IsNullOrEmpty(rootTokenOverride) ||
+                !string.IsNullOrEmpty(bootstrapperPathOverride) || bootstrapperProcessId > 0;
+            if (hasBootstrapContext && (string.IsNullOrEmpty(rootOverride) ||
+                string.IsNullOrEmpty(rootTokenOverride) ||
+                string.IsNullOrEmpty(bootstrapperPathOverride) || bootstrapperProcessId <= 0))
+                return 41;
             PortableLayout layout = PortableLayout.FromExecutable(rootOverride, rootTokenOverride);
             LauncherLocale.Load(layout);
             if (bootstrapperProcessId == Process.GetCurrentProcess().Id ||
-                (bootstrapperProcessId > 0 && !IsBootstrapperForLayout(bootstrapperProcessId, layout)))
+                (bootstrapperProcessId > 0 && !IsBootstrapperForLayout(bootstrapperProcessId,
+                    bootstrapperPathOverride, layout)))
                 return 41;
 
             // The launcher is a handoff tool, not a second desktop shell. If the
@@ -128,18 +145,22 @@ namespace CodexPortable
             }
         }
 
-        private static bool IsBootstrapperForLayout(int processId, PortableLayout layout)
+        private static bool IsBootstrapperForLayout(int processId, string bootstrapperPath,
+            PortableLayout layout)
         {
-            if (processId <= 0 || layout == null) return false;
+            if (processId <= 0 || string.IsNullOrEmpty(bootstrapperPath) || layout == null) return false;
             Process process = null;
             try
             {
                 process = Process.GetProcessById(processId);
                 string executable;
                 if (!PortableProcess.TryGetExecutablePath(process, out executable)) return false;
-                string expected = Path.Combine(layout.Root, "CodexPortable.exe");
-                return string.Equals(Path.GetFullPath(executable).TrimEnd('\\'),
-                    Path.GetFullPath(expected).TrimEnd('\\'),
+                string actual = Path.GetFullPath(executable).TrimEnd('\\');
+                string expected = Path.GetFullPath(bootstrapperPath).TrimEnd('\\');
+                string root = Path.GetFullPath(layout.Root).TrimEnd('\\');
+                if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) return false;
+                string parent = Path.GetDirectoryName(actual);
+                return string.Equals(parent == null ? "" : parent.TrimEnd('\\'), root,
                     StringComparison.OrdinalIgnoreCase);
             }
             catch { return false; }
@@ -1328,6 +1349,15 @@ namespace CodexPortable
             internal string Backup;
             internal bool ExistingMoved;
             internal bool NewMoved;
+            internal readonly List<RestoredChild> RestoredChildren =
+                new List<RestoredChild>();
+        }
+
+        private sealed class RestoredChild
+        {
+            internal string Backup;
+            internal string Destination;
+            internal bool Directory;
         }
 
         internal static bool HasInstallPackages(PortableLayout layout)
@@ -1616,9 +1646,17 @@ namespace CodexPortable
                     {
                         Directory.Move(destination, backup);
                         record.ExistingMoved = true;
+                        // The package owns the files it supplies, but the root
+                        // may also contain user-created runtimes, catalogs, or
+                        // other entries.  Validate the old tree before moving
+                        // any of those entries back into the new package root.
+                        AssertNoReparsePoints(backup);
                     }
                     Directory.Move(source, destination);
                     record.NewMoved = true;
+                    if (record.ExistingMoved)
+                        RestoreUnownedChildren(backup, destination,
+                            record.RestoredChildren);
                 }
                 AssertCommonFiles(layout.DataRoot);
             }
@@ -1632,6 +1670,7 @@ namespace CodexPortable
                     {
                         if (record.NewMoved && Directory.Exists(record.Destination))
                         {
+                            RestoreChildrenForRollback(record.RestoredChildren);
                             string failed = Path.Combine(failedRoot, i.ToString(CultureInfo.InvariantCulture));
                             Directory.CreateDirectory(Path.GetDirectoryName(failed));
                             Directory.Move(record.Destination, failed);
@@ -1657,6 +1696,68 @@ namespace CodexPortable
                 if (!retain && Directory.Exists(transaction))
                     IOUtil.DeleteDirectoryWithin(transaction, layout.Updates);
             }
+        }
+
+        private static void RestoreUnownedChildren(string backup, string destination,
+            List<RestoredChild> restored)
+        {
+            string[] children = Directory.GetFileSystemEntries(backup, "*",
+                SearchOption.TopDirectoryOnly);
+            for (int i = 0; i < children.Length; i++)
+            {
+                string child = children[i];
+                string name = Path.GetFileName(child);
+                if (string.IsNullOrEmpty(name))
+                    throw new IOException("Common runtime backup contains an invalid child path.");
+                string target = Path.Combine(destination, name);
+                bool childDirectory = Directory.Exists(child);
+                bool targetDirectory = Directory.Exists(target);
+                bool targetFile = File.Exists(target);
+                if (!targetDirectory && !targetFile)
+                {
+                    if (childDirectory) Directory.Move(child, target);
+                    else File.Move(child, target);
+                    restored.Add(new RestoredChild {
+                        Backup = child,
+                        Destination = target,
+                        Directory = childDirectory
+                    });
+                    continue;
+                }
+                if (childDirectory && targetDirectory)
+                {
+                    RestoreUnownedChildren(child, target, restored);
+                    continue;
+                }
+                if (childDirectory != targetDirectory)
+                    throw new IOException(
+                        "Common runtime update would replace a user entry with a different path type: " +
+                        target);
+                // A file at the same relative path is package-owned and is
+                // intentionally replaced by the new archive content.
+            }
+        }
+
+        private static void RestoreChildrenForRollback(List<RestoredChild> restored)
+        {
+            for (int i = restored.Count - 1; i >= 0; i--)
+            {
+                RestoredChild child = restored[i];
+                if (!CommonPathExists(child.Destination))
+                    throw new IOException("Common runtime rollback child is missing: " +
+                        child.Destination);
+                if (CommonPathExists(child.Backup))
+                    throw new IOException("Common runtime rollback backup is occupied: " +
+                        child.Backup);
+                if (child.Directory) Directory.Move(child.Destination, child.Backup);
+                else File.Move(child.Destination, child.Backup);
+            }
+            restored.Clear();
+        }
+
+        private static bool CommonPathExists(string path)
+        {
+            return Directory.Exists(path) || File.Exists(path);
         }
 
         private static void ExtractCommonArchiveWithTar(string archivePath, string staging,
@@ -2505,10 +2606,10 @@ namespace CodexPortable
             "electron.onboarding.conversationalOnboarding.";
         private const string OfficialOnboardingBrandText = "ChatGPT";
         private const string PortableOnboardingBrandText = "Codex";
-        private const string OfficialOnboardingHeaderIconText =
-            "p=c?(0,c9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,c9.jsx)(tU,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
-        private const string PortableOnboardingHeaderIconText =
-            "p=0?(0,c9.jsx)(`div`,{className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`,children:(0,c9.jsx)(tU,{\"aria-hidden\":`true`,className:`pointer-events-none size-6 text-default`})}):null";
+        private const string OnboardingHeaderContainerClassText =
+            "className:`fixed inset-x-0 top-0 z-10 flex h-toolbar items-center justify-center bg-surface draggable select-none`";
+        private const string OnboardingHeaderIconClassText =
+            "className:`pointer-events-none size-6 text-default`";
         private const string OfficialWindowsSandboxSetupPendingGateText =
             "isWindowsSandboxSetupPending:Sr!=null&&Ct";
         private static readonly string PortableWindowsSandboxSetupPendingGateText =
@@ -2557,6 +2658,301 @@ namespace CodexPortable
             internal string IntegrityHash;
             internal int BlockSize;
             internal readonly List<string> IntegrityBlocks = new List<string>();
+            internal int IntegrityHashOffset = -1;
+            internal readonly List<int> IntegrityBlockOffsets = new List<int>();
+        }
+
+        private sealed class JsonPropertySpan
+        {
+            internal string Name;
+            internal int ValueStart;
+            internal int ValueEnd;
+        }
+
+        private sealed class IntegrityLocation
+        {
+            internal string Path;
+            internal string Hash;
+            internal int HashOffset;
+            internal readonly List<string> Blocks = new List<string>();
+            internal readonly List<int> BlockOffsets = new List<int>();
+        }
+
+        // JavaScriptSerializer gives us the typed ASAR tree, but does not
+        // expose source positions. This small JSON scanner records the exact
+        // hash-string offsets while walking the same `files` hierarchy.
+        private sealed class HeaderJsonScanner
+        {
+            private readonly string Text;
+            private int Position;
+
+            internal HeaderJsonScanner(string text) { Text = text ?? ""; }
+
+            internal List<IntegrityLocation> Scan()
+            {
+                SkipWhitespace();
+                List<JsonPropertySpan> root = ReadObject();
+                JsonPropertySpan files = FindProperty(root, "files");
+                if (files == null || !IsObject(files.ValueStart))
+                    throw new InvalidDataException("Electron ASAR file table is missing.");
+                SkipWhitespace();
+                if (Position != Text.Length)
+                    throw new InvalidDataException("Electron ASAR header has trailing JSON data.");
+                List<IntegrityLocation> result = new List<IntegrityLocation>();
+                ScanDirectory(files.ValueStart, "", result);
+                return result;
+            }
+
+            private void ScanDirectory(int objectStart, string prefix,
+                List<IntegrityLocation> result)
+            {
+                List<JsonPropertySpan> children = ReadObjectAt(objectStart);
+                for (int i = 0; i < children.Count; i++)
+                {
+                    JsonPropertySpan child = children[i];
+                    if (!IsObject(child.ValueStart)) continue;
+                    string path = prefix.Length == 0 ? child.Name : prefix + "/" + child.Name;
+                    List<JsonPropertySpan> properties = ReadObjectAt(child.ValueStart);
+                    JsonPropertySpan files = FindProperty(properties, "files");
+                    if (files != null)
+                    {
+                        if (!IsObject(files.ValueStart))
+                            throw new InvalidDataException("Electron ASAR directory is invalid.");
+                        ScanDirectory(files.ValueStart, path, result);
+                        continue;
+                    }
+                    JsonPropertySpan integrity = FindProperty(properties, "integrity");
+                    if (integrity != null && IsObject(integrity.ValueStart))
+                        result.Add(ReadIntegrity(path, integrity.ValueStart));
+                }
+            }
+
+            private IntegrityLocation ReadIntegrity(string path, int objectStart)
+            {
+                List<JsonPropertySpan> properties = ReadObjectAt(objectStart);
+                JsonPropertySpan hash = FindProperty(properties, "hash");
+                JsonPropertySpan blocks = FindProperty(properties, "blocks");
+                if (hash == null || blocks == null || !IsString(hash.ValueStart) ||
+                    !IsArray(blocks.ValueStart))
+                    throw new InvalidDataException("Electron ASAR SHA-256 metadata is incomplete.");
+                int hashOffset;
+                int hashEnd;
+                string hashValue = ReadStringAt(hash.ValueStart, out hashOffset, out hashEnd);
+                if (hashEnd - hashOffset != hashValue.Length)
+                    throw new InvalidDataException("Electron ASAR hash encoding is unsupported.");
+                IntegrityLocation result = new IntegrityLocation {
+                    Path = path,
+                    Hash = NormalizeHash(hashValue),
+                    HashOffset = hashOffset
+                };
+                ReadStringArrayAt(blocks.ValueStart, result);
+                return result;
+            }
+
+            private void ReadStringArrayAt(int arrayStart, IntegrityLocation result)
+            {
+                Position = arrayStart;
+                SkipWhitespace();
+                Expect('[');
+                SkipWhitespace();
+                if (Peek() == ']') { Position++; return; }
+                while (true)
+                {
+                    SkipWhitespace();
+                    if (!IsString(Position))
+                        throw new InvalidDataException("Electron ASAR block hashes are invalid.");
+                    int offset;
+                    int end;
+                    string value = ReadString(out offset, out end);
+                    if (end - offset != value.Length)
+                        throw new InvalidDataException("Electron ASAR block hash encoding is unsupported.");
+                    result.Blocks.Add(NormalizeHash(value));
+                    result.BlockOffsets.Add(offset);
+                    SkipWhitespace();
+                    char separator = Peek();
+                    if (separator == ']') { Position++; return; }
+                    if (separator != ',')
+                        throw new InvalidDataException("Electron ASAR block hash array is invalid.");
+                    Position++;
+                }
+            }
+
+            private List<JsonPropertySpan> ReadObjectAt(int start)
+            {
+                Position = start;
+                return ReadObject();
+            }
+
+            private List<JsonPropertySpan> ReadObject()
+            {
+                SkipWhitespace();
+                Expect('{');
+                List<JsonPropertySpan> result = new List<JsonPropertySpan>();
+                SkipWhitespace();
+                if (Peek() == '}') { Position++; return result; }
+                while (true)
+                {
+                    SkipWhitespace();
+                    if (!IsString(Position))
+                        throw new InvalidDataException("Electron ASAR JSON property name is invalid.");
+                    int ignoredStart;
+                    int ignoredEnd;
+                    string name = ReadString(out ignoredStart, out ignoredEnd);
+                    SkipWhitespace();
+                    Expect(':');
+                    SkipWhitespace();
+                    int valueStart = Position;
+                    SkipValue();
+                    result.Add(new JsonPropertySpan {
+                        Name = name,
+                        ValueStart = valueStart,
+                        ValueEnd = Position
+                    });
+                    SkipWhitespace();
+                    char separator = Peek();
+                    if (separator == '}') { Position++; return result; }
+                    if (separator != ',')
+                        throw new InvalidDataException("Electron ASAR JSON object is invalid.");
+                    Position++;
+                }
+            }
+
+            private void SkipValue()
+            {
+                SkipWhitespace();
+                char value = Peek();
+                if (value == '{') { ReadObject(); return; }
+                if (value == '[') { SkipArray(); return; }
+                if (value == '"')
+                {
+                    int ignoredStart;
+                    int ignoredEnd;
+                    ReadString(out ignoredStart, out ignoredEnd);
+                    return;
+                }
+                int start = Position;
+                while (Position < Text.Length && ",}] \t\r\n".IndexOf(Text[Position]) < 0)
+                    Position++;
+                if (Position == start)
+                    throw new InvalidDataException("Electron ASAR JSON value is invalid.");
+            }
+
+            private void SkipArray()
+            {
+                Expect('[');
+                SkipWhitespace();
+                if (Peek() == ']') { Position++; return; }
+                while (true)
+                {
+                    SkipValue();
+                    SkipWhitespace();
+                    char separator = Peek();
+                    if (separator == ']') { Position++; return; }
+                    if (separator != ',')
+                        throw new InvalidDataException("Electron ASAR JSON array is invalid.");
+                    Position++;
+                }
+            }
+
+            private string ReadStringAt(int start, out int contentStart, out int contentEnd)
+            {
+                Position = start;
+                return ReadString(out contentStart, out contentEnd);
+            }
+
+            private string ReadString(out int contentStart, out int contentEnd)
+            {
+                Expect('"');
+                contentStart = Position;
+                StringBuilder value = new StringBuilder();
+                while (Position < Text.Length)
+                {
+                    char current = Text[Position++];
+                    if (current == '"')
+                    {
+                        contentEnd = Position - 1;
+                        return value.ToString();
+                    }
+                    if (current == '\\')
+                    {
+                        if (Position >= Text.Length)
+                            throw new InvalidDataException("Electron ASAR JSON string is truncated.");
+                        char escaped = Text[Position++];
+                        switch (escaped)
+                        {
+                            case '"': value.Append('"'); break;
+                            case '\\': value.Append('\\'); break;
+                            case '/': value.Append('/'); break;
+                            case 'b': value.Append('\b'); break;
+                            case 'f': value.Append('\f'); break;
+                            case 'n': value.Append('\n'); break;
+                            case 'r': value.Append('\r'); break;
+                            case 't': value.Append('\t'); break;
+                            case 'u':
+                                if (Position + 4 > Text.Length)
+                                    throw new InvalidDataException("Electron ASAR JSON unicode escape is truncated.");
+                                int code = 0;
+                                for (int i = 0; i < 4; i++)
+                                {
+                                    int digit = HexValue(Text[Position + i]);
+                                    if (digit < 0) throw new InvalidDataException("Electron ASAR JSON unicode escape is invalid.");
+                                    code = code * 16 + digit;
+                                }
+                                value.Append((char)code);
+                                Position += 4;
+                                break;
+                            default:
+                                throw new InvalidDataException("Electron ASAR JSON escape is invalid.");
+                        }
+                    }
+                    else
+                    {
+                        if (current < 0x20) throw new InvalidDataException("Electron ASAR JSON string contains a control character.");
+                        value.Append(current);
+                    }
+                }
+                throw new InvalidDataException("Electron ASAR JSON string is truncated.");
+            }
+
+            private static int HexValue(char value)
+            {
+                if (value >= '0' && value <= '9') return value - '0';
+                if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+                if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+                return -1;
+            }
+
+            private static JsonPropertySpan FindProperty(List<JsonPropertySpan> properties,
+                string name)
+            {
+                JsonPropertySpan result = null;
+                for (int i = 0; i < properties.Count; i++)
+                    if (string.Equals(properties[i].Name, name, StringComparison.Ordinal))
+                    {
+                        if (result != null)
+                            throw new InvalidDataException("Electron ASAR JSON property is duplicated: " + name);
+                        result = properties[i];
+                    }
+                return result;
+            }
+
+            private bool IsObject(int offset) { return offset >= 0 && offset < Text.Length && Text[offset] == '{'; }
+            private bool IsArray(int offset) { return offset >= 0 && offset < Text.Length && Text[offset] == '['; }
+            private bool IsString(int offset) { return offset >= 0 && offset < Text.Length && Text[offset] == '"'; }
+            private char Peek() { return Position < Text.Length ? Text[Position] : '\0'; }
+
+            private void SkipWhitespace()
+            {
+                while (Position < Text.Length && (Text[Position] == ' ' || Text[Position] == '\t' ||
+                    Text[Position] == '\r' || Text[Position] == '\n')) Position++;
+            }
+
+            private void Expect(char expected)
+            {
+                if (Peek() != expected)
+                    throw new InvalidDataException("Electron ASAR JSON structure is invalid.");
+                Position++;
+            }
         }
 
         private sealed class OnboardingEntryTarget
@@ -2595,8 +2991,11 @@ namespace CodexPortable
             internal readonly int HeaderJsonLength;
             internal string HeaderJson;
             internal readonly List<AsarEntry> Entries = new List<AsarEntry>();
-            internal readonly Dictionary<string, string> IntegrityReplacements =
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // Header hashes are addressed by their JSON field offsets instead
+            // of globally replacing hash text.  Unrelated ASAR entries may
+            // legitimately share the same SHA-256 value.
+            internal readonly Dictionary<int, string> IntegrityReplacements =
+                new Dictionary<int, string>();
 
             internal AsarArchive(string path, bool writable)
             {
@@ -2643,6 +3042,7 @@ namespace CodexPortable
                 Dictionary<string, object> files = filesObject as Dictionary<string, object>;
                 if (files == null) throw new InvalidDataException("Electron ASAR file table is invalid.");
                 AddEntries(files, "");
+                BindIntegrityOffsets();
             }
 
             private void AddEntries(Dictionary<string, object> files, string prefix)
@@ -2712,6 +3112,37 @@ namespace CodexPortable
                 }
             }
 
+            private void BindIntegrityOffsets()
+            {
+                HeaderJsonScanner scanner = new HeaderJsonScanner(HeaderJson);
+                List<IntegrityLocation> locations = scanner.Scan();
+                Dictionary<string, IntegrityLocation> byPath =
+                    new Dictionary<string, IntegrityLocation>(StringComparer.Ordinal);
+                for (int i = 0; i < locations.Count; i++)
+                {
+                    if (byPath.ContainsKey(locations[i].Path))
+                        throw new InvalidDataException("Duplicate Electron ASAR integrity entry: " + locations[i].Path);
+                    byPath.Add(locations[i].Path, locations[i]);
+                }
+                for (int i = 0; i < Entries.Count; i++)
+                {
+                    AsarEntry entry = Entries[i];
+                    IntegrityLocation match;
+                    if (!byPath.TryGetValue(entry.Path, out match) ||
+                        !string.Equals(match.Hash, entry.IntegrityHash,
+                            StringComparison.OrdinalIgnoreCase) ||
+                        match.Blocks.Count != entry.IntegrityBlocks.Count ||
+                        match.BlockOffsets.Count != entry.IntegrityBlocks.Count)
+                        throw new InvalidDataException("Electron ASAR integrity field could not be located: " + entry.Path);
+                    for (int block = 0; block < entry.IntegrityBlocks.Count; block++)
+                        if (!string.Equals(match.Blocks[block], entry.IntegrityBlocks[block],
+                                StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Electron ASAR block integrity field could not be located: " + entry.Path);
+                    entry.IntegrityHashOffset = match.HashOffset;
+                    entry.IntegrityBlockOffsets.AddRange(match.BlockOffsets);
+                }
+            }
+
             internal AsarEntry FindRequiredEntry(string relativePath)
             {
                 AsarEntry result = null;
@@ -2743,11 +3174,14 @@ namespace CodexPortable
 
             internal void AddIntegrityReplacement(AsarEntry entry, IntegrityState replacement)
             {
-                AddReplacement(entry.IntegrityHash, replacement.Hash);
+                if (entry.IntegrityHashOffset < 0 ||
+                    entry.IntegrityBlockOffsets.Count != entry.IntegrityBlocks.Count)
+                    throw new InvalidDataException("Electron ASAR integrity fields are not bound.");
+                AddReplacement(entry.IntegrityHashOffset, replacement.Hash);
                 if (entry.IntegrityBlocks.Count != replacement.Blocks.Count)
                     throw new InvalidDataException("Electron ASAR block hashes changed shape.");
                 for (int i = 0; i < entry.IntegrityBlocks.Count; i++)
-                    AddReplacement(entry.IntegrityBlocks[i], replacement.Blocks[i]);
+                    AddReplacement(entry.IntegrityBlockOffsets[i], replacement.Blocks[i]);
                 // Keep the in-memory entry metadata in lockstep with the
                 // bytes just written.  A minified bundle can contain several
                 // targets in one entry; the next target must validate against
@@ -2757,31 +3191,27 @@ namespace CodexPortable
                 entry.IntegrityBlocks.AddRange(replacement.Blocks);
             }
 
-            private void AddReplacement(string original, string replacement)
+            private void AddReplacement(int offset, string replacement)
             {
-                if (string.Equals(original, replacement, StringComparison.OrdinalIgnoreCase)) return;
-                string existing;
-                if (IntegrityReplacements.TryGetValue(original, out existing) &&
-                    !string.Equals(existing, replacement, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Conflicting Electron ASAR integrity replacement.");
-                IntegrityReplacements[original] = replacement;
+                if (replacement == null || replacement.Length != 64 ||
+                    offset < 0 || offset + replacement.Length > HeaderJson.Length)
+                    throw new InvalidDataException("Electron ASAR integrity field offset is invalid.");
+                // A single entry can be patched more than once before the
+                // header is flushed. Replace the pending value at that exact
+                // field offset so H0 -> H1 -> H2 remains valid.
+                IntegrityReplacements[offset] = replacement;
             }
 
             internal void FlushHeader()
             {
                 if (IntegrityReplacements.Count == 0) return;
                 char[] rewritten = HeaderJson.ToCharArray();
-                foreach (KeyValuePair<string, string> pair in IntegrityReplacements)
+                foreach (KeyValuePair<int, string> pair in IntegrityReplacements)
                 {
-                    int count = 0;
-                    int index = 0;
-                    while ((index = HeaderJson.IndexOf(pair.Key, index, StringComparison.OrdinalIgnoreCase)) >= 0)
-                    {
-                        for (int i = 0; i < pair.Key.Length; i++) rewritten[index + i] = pair.Value[i];
-                        index += pair.Key.Length;
-                        count++;
-                    }
-                    if (count == 0) throw new InvalidDataException("Electron ASAR integrity hash was not found in its header.");
+                    if (pair.Key < 0 || pair.Key + pair.Value.Length > rewritten.Length)
+                        throw new InvalidDataException("Electron ASAR integrity replacement offset is invalid.");
+                    for (int i = 0; i < pair.Value.Length; i++)
+                        rewritten[pair.Key + i] = pair.Value[i];
                 }
                 string value = new string(rewritten);
                 byte[] bytes = new UTF8Encoding(false, true).GetBytes(value);
@@ -3128,8 +3558,6 @@ namespace CodexPortable
                         Encoding.UTF8.GetBytes(OfficialRuntimeInstallGuardText);
                     byte[] portableRuntimeInstallGuard =
                         Encoding.UTF8.GetBytes(PortableRuntimeInstallGuardText);
-                    byte[] workspaceDependenciesSettingsFunction =
-                        Encoding.UTF8.GetBytes(WorkspaceDependenciesSettingsFunctionText);
                     byte[] officialWorkspaceDependenciesSettingsPanelGate =
                         Encoding.UTF8.GetBytes(OfficialWorkspaceDependenciesSettingsPanelGateText);
                     byte[] portableWorkspaceDependenciesSettingsPanelGate =
@@ -3227,7 +3655,8 @@ namespace CodexPortable
                         int portableRuntimeInstallGuardCount =
                             CountPattern(bytes, portableRuntimeInstallGuard);
                         int workspaceDependenciesSettingsFunctionCount =
-                            CountPattern(bytes, workspaceDependenciesSettingsFunction);
+                            CountIdentifierPattern(bytes,
+                                WorkspaceDependenciesSettingsFunctionText, entry);
                         int officialWorkspaceDependenciesSettingsPanelGateCount =
                             CountPattern(bytes, officialWorkspaceDependenciesSettingsPanelGate);
                         int portableWorkspaceDependenciesSettingsPanelGateCount =
@@ -3465,7 +3894,8 @@ namespace CodexPortable
 
                     AsarEntry onboardingHeaderIcon = FindOnboardingHeaderIconEntry(archive);
                     byte[] onboardingHeaderIconBytes = archive.ReadEntry(onboardingHeaderIcon);
-                    if (!HasOnboardingHeaderIconState(onboardingHeaderIconBytes, true) ||
+                    if (!HasOnboardingHeaderIconState(onboardingHeaderIconBytes, true,
+                            onboardingHeaderIcon) ||
                         CountIdentifierPattern(onboardingHeaderIconBytes,
                             OfficialWindowsSandboxSetupPendingGateText, onboardingHeaderIcon) != 0 ||
                         CountIdentifierPattern(onboardingHeaderIconBytes,
@@ -3565,44 +3995,123 @@ namespace CodexPortable
 
         private static void EnsureOnboardingHeaderIconEntry(AsarArchive archive, AsarEntry entry)
         {
+            // The minifier renames the JSX aliases between desktop releases.
+            // Locate the one stable header container/icon pair and rewrite only
+            // its condition to equal-length JavaScript whitespace. This keeps
+            // ASAR offsets stable without binding the patch to volatile aliases.
             archive.FlushHeader();
             byte[] currentBytes = archive.ReadEntry(entry);
-            bool iconIsOfficial = HasOnboardingHeaderIconState(currentBytes, false);
-            bool iconIsPortable = HasOnboardingHeaderIconState(currentBytes, true);
-            if (iconIsOfficial == iconIsPortable)
+            int conditionOffset;
+            int conditionLength;
+            bool isPortable;
+            if (!TryFindOnboardingHeaderIconCondition(currentBytes, out conditionOffset,
+                    out conditionLength, out isPortable))
                 throw new InvalidDataException(
-                    "Electron onboarding header icon state is missing, mixed, or ambiguous: " + entry.Path);
-
-            byte[] officialIcon = Encoding.UTF8.GetBytes(OfficialOnboardingHeaderIconText);
-            byte[] portableIcon = Encoding.UTF8.GetBytes(PortableOnboardingHeaderIconText);
-            byte[] originalBytes = (byte[])currentBytes.Clone();
-            if (iconIsPortable) ReplacePattern(originalBytes, portableIcon, officialIcon);
-            byte[] portableBytes = (byte[])originalBytes.Clone();
-            ReplacePattern(portableBytes, officialIcon, portableIcon);
-            if (!HasOnboardingHeaderIconState(originalBytes, false) ||
-                !HasOnboardingHeaderIconState(portableBytes, true))
-                throw new InvalidDataException("Electron onboarding header transformation failed: " +
+                    "Electron onboarding header icon target is missing or ambiguous: " +
                     entry.Path);
+            if (isPortable)
+            {
+                // If a previous run wrote the entry before its header hash,
+                // the portable bytes are still a known, intentional state.  A
+                // fresh hash repairs that interrupted state while preserving
+                // the offset-bound header update.  Unknown bytes never reach
+                // this branch because TryFindOnboardingHeaderIconCondition
+                // only accepts the exact portable replacement shape.
+                IntegrityState repairedIntegrity = ComputeIntegrity(currentBytes,
+                    entry.BlockSize);
+                if (!IntegrityMatches(entry, repairedIntegrity))
+                    archive.AddIntegrityReplacement(entry, repairedIntegrity);
+                return;
+            }
 
-            IntegrityState originalIntegrity = ComputeIntegrity(originalBytes, entry.BlockSize);
+            byte[] portableBytes = (byte[])currentBytes.Clone();
+            portableBytes[conditionOffset] = (byte)'0';
+            for (int i = 1; i < conditionLength; i++)
+                portableBytes[conditionOffset + i] = (byte)' ';
+            IntegrityState currentIntegrity = ComputeIntegrity(currentBytes, entry.BlockSize);
             IntegrityState portableIntegrity = ComputeIntegrity(portableBytes, entry.BlockSize);
-            bool headerIsOriginal = IntegrityMatches(entry, originalIntegrity);
+            bool headerIsCurrent = IntegrityMatches(entry, currentIntegrity);
             bool headerIsPortable = IntegrityMatches(entry, portableIntegrity);
-            if (!headerIsOriginal && !headerIsPortable)
-                throw new InvalidDataException("Electron onboarding header entry failed integrity verification: " +
+            if (!headerIsCurrent && !headerIsPortable)
+                throw new InvalidDataException(
+                    "Electron onboarding header icon entry failed integrity verification: " +
                     entry.Path);
-
-            if (!iconIsPortable) archive.WriteEntry(entry, portableBytes);
-            if (!headerIsPortable) archive.AddIntegrityReplacement(entry, portableIntegrity);
+            // The entry bytes and ASAR header can be observed between the two
+            // writes after an interrupted prior run. Always converge official
+            // bytes to the portable state; only the header update is conditional.
+            archive.WriteEntry(entry, portableBytes);
+            if (headerIsCurrent)
+                archive.AddIntegrityReplacement(entry, portableIntegrity);
         }
 
-        private static bool HasOnboardingHeaderIconState(byte[] bytes, bool portable)
+        private static bool HasOnboardingHeaderIconState(byte[] bytes, bool portable,
+            AsarEntry entry)
         {
-            byte[] selectedIcon = Encoding.UTF8.GetBytes(portable ?
-                PortableOnboardingHeaderIconText : OfficialOnboardingHeaderIconText);
-            byte[] rejectedIcon = Encoding.UTF8.GetBytes(portable ?
-                OfficialOnboardingHeaderIconText : PortableOnboardingHeaderIconText);
-            return CountPattern(bytes, selectedIcon) == 1 && CountPattern(bytes, rejectedIcon) == 0;
+            int conditionOffset;
+            int conditionLength;
+            bool isPortable;
+            if (!TryFindOnboardingHeaderIconCondition(bytes, out conditionOffset,
+                    out conditionLength, out isPortable)) return false;
+            return isPortable == portable;
+        }
+
+        private static bool TryFindOnboardingHeaderIconCondition(byte[] bytes,
+            out int conditionOffset, out int conditionLength, out bool isPortable)
+        {
+            conditionOffset = -1;
+            conditionLength = 0;
+            isPortable = false;
+            string text;
+            try { text = new UTF8Encoding(false, true).GetString(bytes); }
+            catch (DecoderFallbackException) { return false; }
+            if (CountText(text, OnboardingHeaderContainerClassText) != 1 ||
+                CountText(text, OnboardingHeaderIconClassText) != 1) return false;
+            int container = text.IndexOf(OnboardingHeaderContainerClassText,
+                StringComparison.Ordinal);
+            int iconClass = text.IndexOf(OnboardingHeaderIconClassText,
+                container + OnboardingHeaderContainerClassText.Length,
+                StringComparison.Ordinal);
+            if (container < 0 || iconClass < 0) return false;
+            int conditional = text.LastIndexOf('?', container);
+            if (conditional < 0 || conditional + 1 >= text.Length ||
+                text[conditional + 1] != '(') return false;
+            int tokenEnd = conditional;
+            while (tokenEnd > 0 && text[tokenEnd - 1] == ' ') tokenEnd--;
+            if (tokenEnd > 0 && text[tokenEnd - 1] == '0' &&
+                tokenEnd > 1 && text[tokenEnd - 2] == '=')
+            {
+                int portableStart = tokenEnd - 1;
+                conditionOffset = Encoding.UTF8.GetByteCount(text.Substring(0, portableStart));
+                conditionLength = Encoding.UTF8.GetByteCount(text.Substring(portableStart,
+                    conditional - portableStart));
+                isPortable = true;
+                return true;
+            }
+            int start = tokenEnd - 1;
+            while (start >= 0 && IsJavaScriptIdentifierPart(text[start])) start--;
+            start++;
+            if (start >= tokenEnd || !IsJavaScriptIdentifierStart(text[start])) return false;
+            for (int i = start; i < tokenEnd; i++)
+                if (!IsJavaScriptIdentifierPart(text[i])) return false;
+            if (start == 0 || text[start - 1] != '=') return false;
+            conditionOffset = Encoding.UTF8.GetByteCount(text.Substring(0, start));
+            conditionLength = Encoding.UTF8.GetByteCount(text.Substring(start,
+                conditional - start));
+            // An upstream minifier condition is an identifier. Replacing it
+            // with `0` plus whitespace preserves both syntax and byte offsets.
+            return conditionLength > 0;
+        }
+
+        private static int CountText(string text, string value)
+        {
+            int count = 0;
+            int offset = 0;
+            while ((offset = text.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                offset += value.Length;
+            }
+            return count;
         }
 
         private static void EnsureOnboardingEntry(AsarArchive archive, OnboardingEntryTarget target)
@@ -3911,7 +4420,7 @@ namespace CodexPortable
                     throw new InvalidDataException(
                         "Electron ASAR entry failed integrity verification: " + entry.Path);
                 if (entry.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
-                    occurrences += CountPattern(bytes, pattern);
+                    occurrences += CountIdentifierPattern(bytes, text, entry);
             }
             return occurrences;
         }
@@ -4049,6 +4558,9 @@ namespace CodexPortable
             string path = entry.Path ?? "";
             if (string.Equals(officialText, OfficialBrandText, StringComparison.Ordinal))
                 return path.IndexOf(".vite/build/window-all-closed", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.Equals(officialText, WorkspaceDependenciesSettingsFunctionText,
+                    StringComparison.Ordinal))
+                return path.IndexOf("agent-settings", StringComparison.OrdinalIgnoreCase) >= 0;
             if (string.Equals(officialText, OfficialSparkleGateText, StringComparison.Ordinal))
                 return path.IndexOf(".vite/build/file-based-logger", StringComparison.OrdinalIgnoreCase) >= 0;
             if (string.Equals(officialText, OfficialWorkerSparkleGateText, StringComparison.Ordinal))
@@ -4288,6 +4800,8 @@ namespace CodexPortable
         {
             if (string.Equals(text, OfficialBrandText, StringComparison.Ordinal) ||
                 string.Equals(text, PortableBrandText, StringComparison.Ordinal)) return OfficialBrandText;
+            if (string.Equals(text, WorkspaceDependenciesSettingsFunctionText,
+                    StringComparison.Ordinal)) return WorkspaceDependenciesSettingsFunctionText;
             if (string.Equals(text, OfficialSparkleGateText, StringComparison.Ordinal) ||
                 string.Equals(text, PortableSparkleGateText, StringComparison.Ordinal)) return OfficialSparkleGateText;
             if (string.Equals(text, OfficialWorkerSparkleGateText, StringComparison.Ordinal) ||

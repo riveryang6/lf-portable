@@ -33,7 +33,8 @@ The launcher leaves user configuration, secrets, sessions, logs, and unknown
 cache entries in place. There is no separate repair script in the WSL-first
 build and release workflow.
 
-Release assembly is performed from WSL with `release.sh`; USB deployment and
-the actual Windows desktop check remain Windows-only operations because they
-need the Windows volume, process, and GUI APIs. The cache is never copied from
-one USB installation to another as a release input.
+Release assembly is performed from WSL with `release.sh`; the resulting
+architecture-specific EXEs are the GitHub assets. USB deployment and the
+actual Windows desktop check remain Windows-only operations because they need
+the Windows volume, process, and GUI APIs. The cache is never copied from one
+USB installation to another as a release input.
