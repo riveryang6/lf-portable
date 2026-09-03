@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.8")]
-[assembly: AssemblyFileVersion("1.4.24.8")]
+[assembly: AssemblyVersion("1.4.24.9")]
+[assembly: AssemblyFileVersion("1.4.24.9")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -797,7 +797,32 @@ namespace CodexPortableBootstrap
                     finally { mutation.Dispose(); }
                 }
                 if (!retainStaging && PathExists(stagingRoot))
-                    DeleteDirectoryTree(stagingRoot);
+                    ScheduleStagingCleanup(stagingRoot);
+            }
+        }
+
+        private static void ScheduleStagingCleanup(string stagingRoot)
+        {
+            // Replacing a package-owned directory is a same-volume rename, but
+            // deleting the old tree can involve hundreds of thousands of files
+            // on a USB volume. Do not keep the extraction dialog's UI thread in
+            // that slow path after the new release inputs are already active.
+            try
+            {
+                Thread cleanup = new Thread(new ThreadStart(delegate
+                {
+                    try { DeleteDirectoryTree(stagingRoot); }
+                    catch { }
+                }));
+                cleanup.Name = "LF Portable staging cleanup";
+                cleanup.IsBackground = true;
+                cleanup.Start();
+            }
+            catch
+            {
+                // A completed swap remains usable even if a cleanup thread
+                // cannot be created. The next bootstrap run removes stale
+                // extraction directories before inspecting the payload.
             }
         }
 
@@ -1355,7 +1380,7 @@ namespace CodexPortableBootstrap
             for (int i = 0; i < stale.Length; i++)
             {
                 AssertExistingDirectoryIsSafe(stale[i]);
-                DeleteDirectoryTree(stale[i]);
+                ScheduleStagingCleanup(stale[i]);
             }
         }
 

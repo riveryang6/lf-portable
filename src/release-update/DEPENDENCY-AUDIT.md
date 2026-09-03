@@ -1,6 +1,6 @@
 # Portable Dependency Audit
 
-This audit covers the common runtime archive used by LF Portable 1.4.24.8:
+This audit covers the common runtime archive used by LF Portable 1.4.24.9:
 `release/CodexData/packages/LFPortable-common.zip`. The archive is deliberately
 self-contained. The launcher selects the copies below from the portable tree
 and does not depend on a host installation, registry entry, or host `PATH` for

@@ -51,7 +51,7 @@ src/release-update/release.sh \
   --launcher-root ./dist \
   --bootstrapper ./build/CodexPortable.bootstrapper.exe \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.8
+  --version 1.4.24.9
 ```
 
 The command creates two direct, architecture-specific executables:
@@ -153,13 +153,13 @@ checkpoints, receipts, hashes, or manifest-comparison files.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.8"
-git tag -a v1.4.24.8 -m "LF Portable 1.4.24.8"
-git push origin HEAD:main refs/tags/v1.4.24.8:refs/tags/v1.4.24.8
+git commit -m "Release LF Portable 1.4.24.9"
+git tag -a v1.4.24.9 -m "LF Portable 1.4.24.9"
+git push origin HEAD:main refs/tags/v1.4.24.9:refs/tags/v1.4.24.9
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.8
-gh release view v1.4.24.8 --json tagName,name,assets
+  --version 1.4.24.9
+gh release view v1.4.24.9 --json tagName,name,assets
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,
