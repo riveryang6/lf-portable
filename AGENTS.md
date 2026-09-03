@@ -16,7 +16,10 @@
 
 - `src/portable-launcher/` 是启动器源码和构建脚本。
 - `src/release-update/` 是 WSL 发布暂存及 WSL-to-Windows 桥接脚本。
-- `dist/` 只保存已验证的 x86 bootstrapper、x86、x64、ARM64 启动器产物。
+- `dist/` 是本地构建和可运行交付输出目录：根目录只能有正式入口 `dist/CodexPortable.exe`，它必须是带内嵌 payload 的已组装包；架构 launcher 输入位于 `dist/CodexData/tools/launchers/`，裸 bootstrapper 位于外部的 `build/CodexPortable.bootstrapper.exe`。
+- `build/CodexPortable.bootstrapper.exe` 是不带 payload 的裸 x86 bootstrapper，只能作为组装输入，禁止直接复制、重命名为正式入口、同步到 U 盘或上传发布；构建脚本不得把它写回 `dist/` 或用裸文件覆盖 `dist/CodexPortable.exe`。
+- 准备 U 盘、上传发布或验收前，必须先按文件角色检查实际输入：可运行输入只能是 `release.py` 生成的 `LFPortable-x64.exe` 或 `LFPortable-arm64.exe`，并且必须能读到内嵌 release ZIP 及对应架构 MSIX；不能把文件名、版本号、文件大小或“位于 dist/”当作 payload 完整性的证明。同步脚本和发布入口都应在任何写盘/上传前拒绝裸 bootstrapper。
+- 拒绝裸 bootstrapper 只是纠正输入，严禁把这次拒绝当作任务完成、停止或“不可用”结论；发现错误输入后必须继续从当前明确指定的 base/input 重新组装，或改用已验证的 `LFPortable-x64.exe`/`LFPortable-arm64.exe`，直到提供可正常启动的交付物。只有在确实缺少必要输入且所有安全替代路径都已检查后，才报告阻塞原因。
 - 不把完整桌面 payload、用户数据、日志、截图、远程控制记录或 USB 备份提交到仓库。
 
 ## 构建与验证
@@ -34,6 +37,10 @@
 运行时行为仍应保持产品契约：首次启动不得闪现官方模型升级公告或 `Try model` CTA；启动器应在交接前抑制已知公告并写入相应的首次运行状态。启动器只对同一便携根目录内的 LF Portable 实例执行单实例保护；系统 WindowsApps 中的官方 Codex Desktop 可以并行运行，不能阻止便携启动，也不得被启动器终止。路径检查失败时，应按便携程序的唯一进程名安全拒绝同一便携根目录的重复启动。
 
 完整桌面包、公共运行库包、程序文件、运行库、恢复输入、配置、SQLite、密钥、用户资料及其他可变数据均来自并保留在便携根目录。固定盘上的会话临时缓存只能作为可选、可丢弃的性能优化；创建或访问失败时必须回落到便携根目录，不得阻止启动。启动器不得创建、要求、复用或宣称依赖本机 LF 程序镜像，也不得从固定盘包缓存恢复便携程序。
+
+## 发布闭环
+
+凡会改变交付行为或交付内容的源码、构建脚本、发布脚本、规则或文档修改，在验证成功后都必须在同一任务内完成一个新的版本发布；仅完成本地构建、启动或测试不算任务完成，除非用户明确要求只做本地编辑。闭环顺序为：从当前主仓库和明确指定的输入重新组装正式架构 EXE，确认输入角色和可启动性，更新版本号，提交变更，创建版本 tag，推送提交和 tag，使用 `publish-release.py` 发布完整的 `LFPortable-x64.exe` 与 `LFPortable-arm64.exe`，再检查远端 tag、Release 和两个资产确实存在。发布操作失败时必须继续排查并修复可处理的输入或流程问题；只有确实缺少必要输入或外部权限且安全替代路径均已检查后，才能报告具体阻塞原因。拒绝裸 bootstrapper 只是纠正输入，不能代替后续组装、发布或完成结论。本闭环不新增 checkpoint、收据、hash、manifest 比对或其他自定义状态文件。
 
 用户已明确授权：在本项目的构建、验收、发布和任务清理过程中，允许自动点击由本任务启动的 Windows 应用或临时 Sandbox 提供的确认对话框（包括关闭测试 Sandbox 的确认框）。该授权只适用于当前项目范围，不延伸到账号、凭据、网络权限、系统安全设置或其他未由当前任务明确授权的外部操作，并仍受更高层平台安全策略约束。
 

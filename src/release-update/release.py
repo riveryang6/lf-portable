@@ -17,6 +17,7 @@ import zipfile
 DOCUMENTATION_SOURCE = Path(os.path.abspath(__file__)).with_name("CodexData-README.txt")
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 ARCHITECTURES = ("x64", "arm64")
+BOOTSTRAPPER_NAME = "CodexPortable.bootstrapper.exe"
 
 COMMON_FILES = (
     ("CodexData/README.txt", "documentation"),
@@ -34,6 +35,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-root", required=True, type=Path)
     parser.add_argument("--launcher-root", required=True, type=Path)
+    parser.add_argument(
+        "--bootstrapper",
+        type=Path,
+        help=(
+            "bare bootstrapper input; defaults to ../build/"
+            f"{BOOTSTRAPPER_NAME} relative to --launcher-root"
+        ),
+    )
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument(
@@ -123,12 +132,12 @@ def append_payload(bootstrapper: Path, payload_archive: Path,
 
 
 def create_architecture_release(
-    base_root: Path, launcher_root: Path, output_root: Path, architecture: str,
-    version: str,
+    base_root: Path, launcher_root: Path, bootstrapper_path: Path,
+    output_root: Path, architecture: str, version: str,
 ) -> Path:
     files = source_files(base_root, launcher_root, architecture, version)
     bootstrapper = require_regular_file(
-        launcher_root / "CodexPortable.exe", "launcher bootstrapper"
+        bootstrapper_path, "launcher bootstrapper"
     )
     output_path = output_root / f"LFPortable-{architecture}.exe"
     with tempfile.TemporaryDirectory(
@@ -148,11 +157,20 @@ def create_architecture_release(
 
 
 def create_release(base_root: Path, launcher_root: Path, output_root: Path, version: str,
-                   requested_architecture: str) -> None:
+                   requested_architecture: str, bootstrapper_path: Path | None = None) -> None:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("--version must contain exactly four numeric components")
     base_root = absolute(base_root, "base root")
     launcher_root = absolute(launcher_root, "launcher root")
+    if bootstrapper_path is None:
+        bootstrapper_path = launcher_root.parent / "build" / BOOTSTRAPPER_NAME
+    bootstrapper_path = absolute(bootstrapper_path, "bootstrapper input")
+    try:
+        bootstrapper_path.relative_to(launcher_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("bootstrapper input must be outside the launcher root")
     output_root = absolute(output_root, "output root")
     if output_root.exists():
         raise ValueError(f"output root already exists: {output_root}")
@@ -164,7 +182,8 @@ def create_release(base_root: Path, launcher_root: Path, output_root: Path, vers
     try:
         for architecture in architectures:
             output_path = create_architecture_release(
-                base_root, launcher_root, output_root, architecture, version
+                base_root, launcher_root, bootstrapper_path, output_root,
+                architecture, version
             )
             print(f"{architecture} executable: {output_path}")
     except Exception:
@@ -175,7 +194,10 @@ def create_release(base_root: Path, launcher_root: Path, output_root: Path, vers
 def main() -> int:
     args = parse_args()
     try:
-        create_release(args.base_root, args.launcher_root, args.output_root, args.version, args.architecture)
+        create_release(
+            args.base_root, args.launcher_root, args.output_root, args.version,
+            args.architecture, args.bootstrapper
+        )
     except (OSError, ValueError, shutil.Error, zipfile.BadZipFile) as error:
         print(f"release.py: {error}", file=sys.stderr)
         return 1

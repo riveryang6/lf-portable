@@ -12,9 +12,11 @@ session cache is optional and never a startup prerequisite.
   launcher sources, icons, and the WSL build entry point.
 - `src/release-update/` contains the WSL package entry point and the
   WSL-to-Windows bridge used for USB deployment and Windows Sandbox.
-- `dist/` contains only the four launcher binaries. It is not a runnable
-  portable release and never contains the desktop payload, profile, keys,
-  logs, or plugin cache.
+- `dist/` is the local build and runnable delivery output. Its root contains
+  only the assembled default x64 `CodexPortable.exe`; the architecture launcher
+  inputs live below `CodexData/tools/launchers/`.
+- `build/CodexPortable.bootstrapper.exe` is the bare x86 assembly input. It is
+  kept outside `dist/` so the runnable root never contains a second EXE.
 
 ## WSL-First Build And Packaging
 
@@ -30,7 +32,8 @@ Build the launcher matrix from WSL:
 
 ```bash
 src/portable-launcher/build-launcher.sh \
-  --output-root ./dist
+  --output-root ./dist \
+  --bootstrapper-output ./build/CodexPortable.bootstrapper.exe
 ```
 
 Use a prepared, non-USB base root to assemble a release. It supplies the
@@ -46,8 +49,9 @@ checks.
 src/release-update/release.sh \
   --base-root /path/to/portable-base \
   --launcher-root ./dist \
+  --bootstrapper ./build/CodexPortable.bootstrapper.exe \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.7
+  --version 1.4.24.8
 ```
 
 The command creates two direct, architecture-specific executables:
@@ -118,6 +122,18 @@ should not start a second portable instance. Use the EXE matching the USB
 target host architecture. These observations are diagnostic and do not block
 building, delivery, or publishing.
 
+`build/CodexPortable.bootstrapper.exe` is the bare x86 bootstrapper used while
+assembling a release and has no embedded payload. It is not a runnable release,
+and it stays outside `dist/`; never rename or pass it to the USB synchronizer.
+Use the self-extracting `LFPortable-x64.exe` or `LFPortable-arm64.exe` output.
+The build script keeps this input separate so a launcher rebuild cannot
+overwrite a runnable `dist/CodexPortable.exe` or leave a second root EXE.
+The synchronizer and publisher reject a direct executable that lacks the
+embedded release ZIP before they touch the USB or invoke `gh`.
+That rejection is an input correction, not a runnable result: finish assembly
+from the prepared base root and use the resulting architecture EXE for the
+USB or release.
+
 WSL remains the workflow entry point, while its interop bridge invokes the
 Windows process inspection, Windows Sandbox, and desktop interaction needed by
 these two checks.
@@ -127,14 +143,23 @@ these two checks.
 Publish from WSL with the GitHub CLI. A stable release has two program assets:
 `LFPortable-x64.exe` and `LFPortable-arm64.exe`.
 
+Publishing is part of the same task as a verified delivery change. After the
+build and runtime checks pass, continue through version bump, commit, tag,
+push, release upload, and a remote check of the tag, Release, and both assets;
+do not stop at a successful local `dist/` build. Use the current repository and
+the explicitly selected release inputs. A rejected bare bootstrapper is an
+input correction, not a completed release. This workflow does not add custom
+checkpoints, receipts, hashes, or manifest-comparison files.
+
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.7"
-git tag -a v1.4.24.7 -m "LF Portable 1.4.24.7"
-git push origin HEAD:main refs/tags/v1.4.24.7:refs/tags/v1.4.24.7
+git commit -m "Release LF Portable 1.4.24.8"
+git tag -a v1.4.24.8 -m "LF Portable 1.4.24.8"
+git push origin HEAD:main refs/tags/v1.4.24.8:refs/tags/v1.4.24.8
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.7
+  --version 1.4.24.8
+gh release view v1.4.24.8 --json tagName,name,assets
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,

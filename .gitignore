@@ -27,3 +27,17 @@ CodexData/updates/
 *.png
 CRPTest-*/
 launcher-matrix*/
+
+# Locally assembled runnable dist output. These files contain the desktop
+# payload or are generated bootstrapper inputs and must not enter the source
+# repository.
+dist/CodexPortable.exe
+dist/CodexData/app/
+dist/CodexData/packages/
+dist/CodexData/README.txt
+dist/CodexData/THIRD_PARTY.txt
+dist/CodexData/tools/dotnet/
+dist/CodexData/tools/gh/
+dist/CodexData/data/profile/.cache/
+dist/CodexData/data/profile/.codex/offline-marketplaces/
+dist/CodexData/data/profile/.codex/plugins/cache/

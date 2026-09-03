@@ -27,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.7")]
-[assembly: AssemblyFileVersion("1.4.24.7")]
+[assembly: AssemblyVersion("1.4.24.8")]
+[assembly: AssemblyFileVersion("1.4.24.8")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -288,7 +288,14 @@ namespace CodexPortable
             try { currentProcessId = Process.GetCurrentProcess().Id; }
             catch { return true; }
             Process[] processes;
-            try { processes = Process.GetProcesses(); }
+            try
+            {
+                // Only the portable desktop uses this executable name. Avoid
+                // opening and probing every process on the machine, including
+                // unrelated installed ChatGPT instances.
+                processes = Process.GetProcessesByName(
+                    Path.GetFileNameWithoutExtension(PortableBranding.DesktopExecutableName));
+            }
             catch { return true; }
             for (int i = 0; i < processes.Length; i++)
             {
@@ -1377,17 +1384,28 @@ namespace CodexPortable
                     ".agents", "plugins", "marketplace.json"));
         }
 
-        internal static void EnsureReady(PortableLayout layout)
+        internal static bool EnsureReady(PortableLayout layout)
         {
-            EnsureReady(layout, null);
+            return EnsureReady(layout, null);
         }
 
-        internal static void EnsureReady(PortableLayout layout,
+        internal static bool EnsureReady(PortableLayout layout,
             Action<FirstLaunchProgress> progress)
         {
+            return EnsureReady(layout, progress, false);
+        }
+
+        internal static bool EnsureReady(PortableLayout layout,
+            Action<FirstLaunchProgress> progress, bool desktopPayloadPrepared)
+        {
             EnsureCommonPayload(layout, progress);
-            if (!PortableBranding.IsPrepared(layout))
-                EnsureDesktopPayload(layout, progress);
+            if (desktopPayloadPrepared || PortableBranding.IsPrepared(layout)) return true;
+            EnsureDesktopPayload(layout, progress);
+            // StageVerifiedReleasePayload validates and brands the complete
+            // tree before atomic activation. Returning this in-memory result
+            // lets the handoff path reuse that proof instead of scanning the
+            // ASAR a second time immediately afterward.
+            return true;
         }
 
         internal static void EnsureCommonPayload(PortableLayout layout)
@@ -4927,12 +4945,20 @@ namespace CodexPortable
             if (pattern.Length == 0 || start < 0 || endExclusive < start || endExclusive > bytes.Length)
                 throw new ArgumentOutOfRangeException("Invalid byte-pattern search bounds.");
             int count = 0;
-            for (int i = start; i <= endExclusive - pattern.Length; )
+            int lastStart = endExclusive - pattern.Length;
+            int candidate = start;
+            // Searching for the first byte with the framework implementation
+            // avoids comparing every long pattern at every byte offset.  The
+            // old loop made the ASAR preflight effectively O(bytes * targets).
+            while (candidate <= lastStart)
             {
+                candidate = Array.IndexOf(bytes, pattern[0], candidate,
+                    endExclusive - candidate);
+                if (candidate < 0 || candidate > lastStart) break;
                 int j = 0;
-                while (j < pattern.Length && bytes[i + j] == pattern[j]) j++;
-                if (j == pattern.Length) { count++; i += pattern.Length; }
-                else i++;
+                while (j < pattern.Length && bytes[candidate + j] == pattern[j]) j++;
+                if (j == pattern.Length) { count++; candidate += pattern.Length; }
+                else candidate++;
             }
             return count;
         }
@@ -4941,11 +4967,17 @@ namespace CodexPortable
         {
             if (pattern.Length == 0 || start < 0 || endExclusive < start || endExclusive > bytes.Length)
                 throw new ArgumentOutOfRangeException("Invalid byte-pattern search bounds.");
-            for (int i = start; i <= endExclusive - pattern.Length; i++)
+            int lastStart = endExclusive - pattern.Length;
+            int candidate = start;
+            while (candidate <= lastStart)
             {
+                candidate = Array.IndexOf(bytes, pattern[0], candidate,
+                    endExclusive - candidate);
+                if (candidate < 0 || candidate > lastStart) return -1;
                 int j = 0;
-                while (j < pattern.Length && bytes[i + j] == pattern[j]) j++;
-                if (j == pattern.Length) return i;
+                while (j < pattern.Length && bytes[candidate + j] == pattern[j]) j++;
+                if (j == pattern.Length) return candidate;
+                candidate++;
             }
             return -1;
         }
@@ -5040,8 +5072,10 @@ namespace CodexPortable
 
     internal sealed class PortableForm : Form
     {
-        private const int StartupInitializationStepTotal = 6;
+        private const int StartupInitializationStepTotal = 4;
         private const int DesktopStartupConfirmationMilliseconds = 9000;
+        private const int DesktopStartupIdleProbeMilliseconds = 2000;
+        private const int DesktopStartupIdleGraceMilliseconds = 1000;
         private readonly PortableLayout layout;
         private readonly Label status;
         private readonly Label details;
@@ -5058,6 +5092,7 @@ namespace CodexPortable
         private bool closingAfterConfirm;
         private bool formIsClosing;
         private bool portablePayloadChecked;
+        private bool portablePayloadPreflight;
         private bool startupStatePrepared;
         private bool startupInitializationRunning;
         private bool requiredPluginCacheValidated;
@@ -5073,6 +5108,7 @@ namespace CodexPortable
             internal bool SupportedArchitecture;
             internal bool PayloadPresent;
             internal bool BundledPayloadAvailable;
+            internal bool PortablePayloadPrepared;
             internal bool ApiConfigured;
         }
 
@@ -5344,21 +5380,31 @@ namespace CodexPortable
                     ReportStartupInitializationProgress(1, "清理旧登录数据", "Cleaning legacy sign-in data",
                         "移除旧版遗留的登录文件", "Removing sign-in files left by older versions");
                     ProviderConfiguration.CleanupLegacyAuthentication(layout);
-                    ReportStartupInitializationProgress(2, "检查启动配置", "Checking startup configuration",
-                        "创建并验证 config.toml", "Creating and validating config.toml");
-                    layout.EnsureConfig();
-                    ReportStartupInitializationProgress(3, "检查首次运行配置", "Checking first-run configuration",
-                        "验证首次运行设置", "Validating first-run settings");
-                    layout.EnsureOnboardingSuppressed();
-                    ReportStartupInitializationProgress(4, "检查 Windows 架构", "Checking Windows architecture",
+                    ReportStartupInitializationProgress(2, "检查 Windows 架构", "Checking Windows architecture",
                         "确认当前系统可用的 Codex 程序包", "Finding the Codex package for this system");
                     result.SupportedArchitecture = ArchitectureInfo.HasOfficialDesktopPayload(layout.Architecture);
                     result.BundledPayloadAvailable = result.SupportedArchitecture &&
                         PortableBundle.HasInstallPackages(layout);
-                    ReportStartupInitializationProgress(5, "检查 LF 发布包", "Checking LF release package",
+                    ReportStartupInitializationProgress(3, "检查 LF 发布包", "Checking LF release package",
                         "确认桌面程序与 API 配置", "Checking the desktop payload and API configuration");
-                    result.PayloadPresent = result.SupportedArchitecture &&
-                        (PortableBranding.IsPrepared(layout) || result.BundledPayloadAvailable);
+                    // A bundled package is enough to make the launcher usable;
+                    // defer the expensive ASAR/branding scan until Start is
+                    // clicked. If no package is available, the installed tree
+                    // is the only recovery input, so it must still be checked.
+                    if (result.SupportedArchitecture)
+                    {
+                        if (result.BundledPayloadAvailable)
+                        {
+                            result.PayloadPresent = true;
+                        }
+                        else
+                        {
+                            result.PortablePayloadPrepared = PortableBranding.IsPrepared(layout);
+                            result.PayloadPresent = result.PortablePayloadPrepared;
+                        }
+                    }
+                    ReportStartupInitializationProgress(4, "检查 API 配置", "Checking API configuration",
+                        "确认 API URL、密钥和模型", "Checking the API URL, key, and model");
                     result.ApiConfigured = ProviderConfiguration.HasCompleteApiConfiguration(layout);
                     return result;
                 });
@@ -5374,6 +5420,17 @@ namespace CodexPortable
                     CloseAfterStartupInitialization();
                     return;
                 }
+                portablePayloadPreflight = initialization.PortablePayloadPrepared;
+                // The background preflight already performed the full ASAR and
+                // branding verification. Reuse that result for this launcher's
+                // lifetime so the handoff path does not scan the 200+ MiB ASAR
+                // a second time. This is an in-memory hint only; any later
+                // failure still falls through to the normal repair/error path.
+                portablePayloadChecked = initialization.PortablePayloadPrepared;
+                // Directory creation and legacy-auth cleanup are complete. The
+                // config and onboarding files are intentionally prepared at
+                // Start time so opening the launcher does not perform duplicate
+                // write-through work before the user chooses an action.
                 startupStatePrepared = true;
                 SetBusy(false, null);
                 if (!initialization.SupportedArchitecture)
@@ -5388,7 +5445,7 @@ namespace CodexPortable
                     details.Text = string.Empty;
                     return;
                 }
-                if (initialization.BundledPayloadAvailable && !PortableBranding.IsPrepared(layout))
+                if (initialization.BundledPayloadAvailable && !portablePayloadPreflight)
                 {
                     RefreshStatus(LauncherLocale.T("就绪", "Ready"));
                     return;
@@ -5552,7 +5609,7 @@ namespace CodexPortable
                     "Codex Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            if (!PortableBranding.IsPrepared(layout) && !PortableBundle.HasInstallPackages(layout))
+            if (!portablePayloadPreflight && !PortableBundle.HasInstallPackages(layout))
             {
                 MessageBox.Show(LauncherLocale.T("未找到完整的 LF 发布包。", "The complete LF release package was not found."), "LF Portable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
@@ -5565,7 +5622,7 @@ namespace CodexPortable
                 return;
             }
             bool needsCommonRuntime = !PortableBundle.CommonPayloadComplete(layout);
-            bool needsDesktopPackage = !PortableBranding.IsPrepared(layout);
+            bool needsDesktopPackage = !portablePayloadPreflight;
             startWorkflowRunning = true;
             SetBusy(true, null);
             BeginLaunchProgressPlan(needsCommonRuntime, needsDesktopPackage);
@@ -5576,10 +5633,13 @@ namespace CodexPortable
                     ReportFirstLaunchPreparationStage(needsCommonRuntime ?
                         FirstLaunchPreparationStage.ValidatingCommonPackage :
                         FirstLaunchPreparationStage.ValidatingDesktopPackage);
-                    await Task.Run(delegate
+                    bool preparedAfterEnsure = await Task.Run(delegate
                     {
-                        PortableBundle.EnsureReady(layout, ReportFirstLaunchPreparationStage);
+                        return PortableBundle.EnsureReady(layout,
+                            ReportFirstLaunchPreparationStage, portablePayloadPreflight);
                     });
+                    portablePayloadPreflight = preparedAfterEnsure;
+                    portablePayloadChecked = preparedAfterEnsure;
                     startupStatePrepared = true;
                 }
                 catch (Exception ex)
@@ -5748,8 +5808,7 @@ namespace CodexPortable
                 uint earlyExitCode = 0;
                 bool exitedDuringStartup = await Task.Run(delegate
                 {
-                    return run.TryGetEarlyExit(DesktopStartupConfirmationMilliseconds,
-                        out earlyExitCode);
+                    return WaitForDesktopStartup(run, out earlyExitCode);
                 });
                 if (DesktopHandoffWasCancelled(run))
                 {
@@ -5959,7 +6018,7 @@ namespace CodexPortable
                     break;
                 case FirstLaunchPreparationStage.ConfirmingDesktopStart:
                     status.Text = LauncherLocale.T("确认 Codex 启动", "Confirming Codex startup");
-                    details.Text = LauncherLocale.T("最多等待 9 秒，检查 U 盘程序加载与早期退出", "Waiting up to 9 seconds for USB program loading and early-exit checks");
+                    details.Text = LauncherLocale.T("程序就绪后立即交接；慢速介质最多等待 9 秒", "Handing off as soon as the app is ready; slow media may take up to 9 seconds");
                     break;
                 case FirstLaunchPreparationStage.DesktopStarted:
                     status.Text = LauncherLocale.T("Codex 已启动", "Codex started");
@@ -6100,7 +6159,34 @@ namespace CodexPortable
         private void InvalidatePayloadPreflight()
         {
             portablePayloadChecked = false;
+            portablePayloadPreflight = false;
             requiredPluginCacheValidated = false;
+        }
+
+        private static bool WaitForDesktopStartup(JobRun run, out uint exitCode)
+        {
+            exitCode = 0;
+            // A normal Electron desktop creates its message queue well before
+            // the first window is painted.  Use that signal to avoid an
+            // unconditional multi-second handoff delay, while retaining the
+            // original full timeout for slow USB media or non-GUI failures.
+            bool inputIdle = false;
+            try
+            {
+                inputIdle = run.TryWaitForInputIdle(DesktopStartupIdleProbeMilliseconds);
+            }
+            catch
+            {
+                // A handle/API failure must not turn a successful desktop
+                // launch into a launcher error; use the legacy wait path.
+                inputIdle = false;
+            }
+            if (inputIdle)
+                return run.TryGetEarlyExit(DesktopStartupIdleGraceMilliseconds, out exitCode);
+            int remaining = DesktopStartupConfirmationMilliseconds -
+                DesktopStartupIdleProbeMilliseconds;
+            if (remaining < 0) remaining = 0;
+            return run.TryGetEarlyExit(remaining, out exitCode);
         }
 
         private JobRun StartDesktopProcess(string arguments)
@@ -7319,6 +7405,34 @@ namespace CodexPortable
             }
         }
 
+        internal bool TryWaitForInputIdle(int timeoutMilliseconds)
+        {
+            if (timeoutMilliseconds < 0) throw new ArgumentOutOfRangeException("timeoutMilliseconds");
+            IntPtr waitHandle = IntPtr.Zero;
+            try
+            {
+                lock (sync)
+                {
+                    if (processHandle == IntPtr.Zero)
+                        throw new InvalidOperationException("Codex process handle is unavailable.");
+                    if (!NativeMethods.DuplicateHandle(NativeMethods.GetCurrentProcess(), processHandle,
+                        NativeMethods.GetCurrentProcess(), out waitHandle, 0, false,
+                        NativeMethods.DuplicateSameAccess))
+                        throw new Win32Exception(Marshal.GetLastWin32Error(),
+                            "Unable to duplicate the Codex process handle.");
+                }
+                // WaitForInputIdle returns zero once a GUI process has created
+                // its message queue, 0x102 on timeout, and 0xffffffff when the
+                // target is not a GUI process or the handle is unavailable.
+                return NativeMethods.WaitForInputIdle(waitHandle,
+                    unchecked((uint)timeoutMilliseconds)) == NativeMethods.WaitObject0;
+            }
+            finally
+            {
+                if (waitHandle != IntPtr.Zero) NativeMethods.CloseHandle(waitHandle);
+            }
+        }
+
         internal bool TryDetachAfterStartup(out uint exitCode)
         {
             lock (sync)
@@ -7609,6 +7723,9 @@ namespace CodexPortable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        internal static extern uint WaitForInputIdle(IntPtr process, uint milliseconds);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

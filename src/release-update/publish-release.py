@@ -9,9 +9,54 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 
 
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+EMBEDDED_RELEASE_REQUIRED = {
+    "codexdata/tools/launchers/codexportable.x86.exe",
+    "codexdata/tools/launchers/codexportable.x64.exe",
+    "codexdata/tools/launchers/codexportable.arm64.exe",
+    "codexdata/packages/lfportable-common.zip",
+}
+
+
+def require_embedded_release_executable(path: Path, architecture: str) -> None:
+    """Reject a launcher component when an assembled release is required."""
+
+    try:
+        with path.open("rb") as executable:
+            if executable.read(2) != b"MZ":
+                raise ValueError(f"release asset is not a Windows PE file: {path}")
+        with zipfile.ZipFile(path) as archive:
+            names = {
+                info.filename.replace("\\", "/").rstrip("/").casefold()
+                for info in archive.infolist()
+                if info.filename and not info.is_dir()
+            }
+    except ValueError:
+        raise
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError(
+            f"release asset has no embedded program payload: {path}; "
+            "assemble it with release.py before publishing"
+        ) from error
+
+    expected_package = f"codexdata/packages/lfportable-{architecture}.msix"
+    missing = sorted((EMBEDDED_RELEASE_REQUIRED | {expected_package}) - names)
+    desktop_packages = sorted(
+        name for name in names
+        if name.startswith("codexdata/packages/lfportable-") and name.endswith(".msix")
+    )
+    if len(desktop_packages) != 1:
+        raise ValueError(
+            f"release asset must embed exactly one desktop package: {path}"
+        )
+    if missing:
+        raise ValueError(
+            "release asset is missing embedded release inputs: "
+            f"{', '.join(missing)}; assemble it with release.py before publishing"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +124,13 @@ def main() -> int:
             + ", ".join(missing),
             file=sys.stderr,
         )
+        return 1
+
+    try:
+        for architecture, executable in zip(("x64", "arm64"), executables):
+            require_embedded_release_executable(executable, architecture)
+    except ValueError as error:
+        print(f"publish-release.py: {error}", file=sys.stderr)
         return 1
 
     try:

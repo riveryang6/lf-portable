@@ -5,14 +5,15 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: build-launcher.sh --output-root DIR [--dotnet PATH] [--framework-dir DIR]
+Usage: build-launcher.sh --output-root DIR [--bootstrapper-output FILE]
+       [--dotnet PATH] [--framework-dir DIR]
        [--payload-archive ZIP --bundle-output EXE]
 
 Builds:
-  DIR/CodexPortable.exe
   DIR/CodexData/tools/launchers/CodexPortable.x86.exe
   DIR/CodexData/tools/launchers/CodexPortable.x64.exe
   DIR/CodexData/tools/launchers/CodexPortable.arm64.exe
+  BOOTSTRAPPER_FILE (outside DIR; defaults to ../build/CodexPortable.bootstrapper.exe)
 
 When --payload-archive and --bundle-output are supplied together, also appends
 the prepared CodexData payload ZIP to the x86 bootstrapper. The resulting EXE
@@ -81,6 +82,7 @@ build_target() {
 }
 
 output_root=''
+bootstrapper_output=''
 dotnet_path=''
 framework_dir=''
 payload_archive=''
@@ -90,6 +92,11 @@ while [[ $# -gt 0 ]]; do
         --output-root)
             [[ $# -ge 2 ]] || fail '--output-root requires a directory'
             output_root=$2
+            shift 2
+            ;;
+        --bootstrapper-output)
+            [[ $# -ge 2 ]] || fail '--bootstrapper-output requires a file'
+            bootstrapper_output=$2
             shift 2
             ;;
         --dotnet)
@@ -148,6 +155,18 @@ mkdir -p -- "$output_root"
 output_root=$(cd -- "$output_root" && pwd -P)
 framework_dir=$(cd -- "$framework_dir" && pwd -P)
 
+if [[ -z $bootstrapper_output ]]; then
+    bootstrapper_output="$(dirname -- "$output_root")/build/CodexPortable.bootstrapper.exe"
+fi
+bootstrapper_parent=$(dirname -- "$bootstrapper_output")
+mkdir -p -- "$bootstrapper_parent"
+bootstrapper_output="$(cd -- "$bootstrapper_parent" && pwd -P)/$(basename -- "$bootstrapper_output")"
+case "$bootstrapper_output" in
+    "$output_root"|"$output_root"/*)
+        fail 'bootstrapper output must be outside the launcher output root'
+        ;;
+esac
+
 core_source="$script_dir/CodexPortable.cs"
 bootstrap_source="$script_dir/CodexPortableBootstrap.cs"
 icon_path="$script_dir/codex.ico"
@@ -181,7 +200,7 @@ for reference_name in "${reference_names[@]}"; do
 done
 
 build_target 'x86 bootstrapper' "$bootstrap_source" x86 \
-    "$output_root/CodexPortable.exe"
+    "$bootstrapper_output"
 build_target 'x86 launcher' "$core_source" x86 \
     "$output_root/CodexData/tools/launchers/CodexPortable.x86.exe"
 build_target 'x64 launcher' "$core_source" x64 \
@@ -190,6 +209,8 @@ build_target 'ARM64 launcher' "$core_source" arm64 \
     "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe"
 
 printf 'Built launcher outputs under %s\n' "$output_root"
+printf 'Bootstrapper input: %s (outside launcher output; release.py embeds it).\n' \
+    "$bootstrapper_output"
 
 if [[ -n $payload_archive ]]; then
     payload_archive=$(cd -- "$(dirname -- "$payload_archive")" && pwd -P)/$(basename -- "$payload_archive")
@@ -198,7 +219,7 @@ if [[ -n $payload_archive ]]; then
     bundle_parent=$(cd -- "$bundle_parent" && pwd -P)
     bundle_output="$bundle_parent/$(basename -- "$bundle_output")"
     [[ ! -e $bundle_output ]] || fail "Bundle output already exists: $bundle_output"
-    if ! cp -- "$output_root/CodexPortable.exe" "$bundle_output" ||
+    if ! cp -- "$bootstrapper_output" "$bundle_output" ||
         ! dd if="$payload_archive" of="$bundle_output" bs=4M iflag=fullblock \
             oflag=append conv=notrunc status=none; then
         rm -f -- "$bundle_output"

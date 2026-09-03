@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.7")]
-[assembly: AssemblyFileVersion("1.4.24.7")]
+[assembly: AssemblyVersion("1.4.24.8")]
+[assembly: AssemblyFileVersion("1.4.24.8")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -497,13 +497,18 @@ namespace CodexPortableBootstrap
                     AssertSafeExistingAncestry(portableRoot,
                         Path.GetDirectoryName(item.TargetPath));
                     AssertExistingPathIsRegularFile(item.TargetPath);
-                    // The launchers are small and carry the upgrade logic.  A
-                    // same-version rebuild can keep their length unchanged,
-                    // so refresh all three on every bootstrap run instead of
-                    // allowing stale launcher code to survive an EXE swap.
-                    if (!replaceExisting && !IsLauncherReleaseInput(item.RelativePath) &&
-                        new FileInfo(item.TargetPath).Length ==
-                        item.ArchiveEntry.Length) continue;
+                    // The launchers are small and carry the upgrade logic. A
+                    // same-version rebuild can keep their length unchanged, so
+                    // compare launcher bytes instead of trusting version or
+                    // length. Identical launchers need no staging or rewrite;
+                    // changed launchers are still refreshed on every upgrade.
+                    if (!replaceExisting && IsLauncherReleaseInput(item.RelativePath))
+                    {
+                        if (IsByteIdentical(item)) continue;
+                    }
+                    else if (!replaceExisting &&
+                        new FileInfo(item.TargetPath).Length == item.ArchiveEntry.Length)
+                        continue;
                 }
                 planned.Add(item);
             }
@@ -519,6 +524,56 @@ namespace CodexPortableBootstrap
                 return string.CompareOrdinal(left.RelativePath, right.RelativePath);
             });
             return planned;
+        }
+
+        private static bool IsByteIdentical(PayloadEntry item)
+        {
+            if (item == null || !PathExists(item.TargetPath)) return false;
+            try
+            {
+                FileInfo existing = new FileInfo(item.TargetPath);
+                if (existing.Length != item.ArchiveEntry.Length) return false;
+                const int bufferSize = 64 * 1024;
+                byte[] expected = new byte[bufferSize];
+                byte[] actual = new byte[bufferSize];
+                try
+                {
+                    using (Stream source = item.ArchiveEntry.Open())
+                    using (FileStream target = new FileStream(item.TargetPath, FileMode.Open,
+                        FileAccess.Read, FileShare.Read, bufferSize, FileOptions.SequentialScan))
+                    {
+                        while (true)
+                        {
+                            int expectedRead = ReadChunk(source, expected);
+                            int actualRead = ReadChunk(target, actual);
+                            if (expectedRead != actualRead) return false;
+                            if (expectedRead == 0) return true;
+                            for (int i = 0; i < expectedRead; i++)
+                                if (expected[i] != actual[i]) return false;
+                        }
+                    }
+                }
+                finally
+                {
+                    Array.Clear(expected, 0, expected.Length);
+                    Array.Clear(actual, 0, actual.Length);
+                }
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (InvalidDataException) { return false; }
+        }
+
+        private static int ReadChunk(Stream stream, byte[] buffer)
+        {
+            int total = 0;
+            while (total < buffer.Length)
+            {
+                int read = stream.Read(buffer, total, buffer.Length - total);
+                if (read == 0) break;
+                total += read;
+            }
+            return total;
         }
 
         private static Version ReadFileVersion(string path)

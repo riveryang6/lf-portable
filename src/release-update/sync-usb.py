@@ -56,6 +56,12 @@ DERIVED_RELEASE_PATHS = (
 PLUGIN_CACHE_ROOT = "CodexData/data/profile/.codex/plugins/cache"
 OFFLINE_MARKETPLACE_ROOT = "CodexData/data/profile/.codex/offline-marketplaces"
 COMMON_PACKAGE_PATH = "CodexData/packages/LFPortable-common.zip"
+EMBEDDED_RELEASE_REQUIRED = {
+    "codexdata/tools/launchers/codexportable.x86.exe",
+    "codexdata/tools/launchers/codexportable.x64.exe",
+    "codexdata/tools/launchers/codexportable.arm64.exe",
+    "codexdata/packages/lfportable-common.zip",
+}
 
 
 class SyncError(RuntimeError):
@@ -94,6 +100,55 @@ def require_regular_file(path: Path, label: str) -> Path:
     attributes = int(getattr(info, "st_file_attributes", 0))
     if not stat.S_ISREG(info.st_mode) or attributes & REPARSE_POINT_ATTRIBUTE:
         raise SyncError(f"required {label} is missing or is not a regular file: {path}")
+    return path
+
+
+def require_embedded_release_executable(path: Path) -> Path:
+    """Reject the bare bootstrapper before it can replace a USB executable."""
+
+    try:
+        with path.open("rb") as executable:
+            if executable.read(2) != b"MZ":
+                raise SyncError(
+                    f"direct release executable is not a Windows PE file: {path}"
+                )
+        with zipfile.ZipFile(path) as archive:
+            names = {
+                info.filename.replace("\\", "/").rstrip("/").casefold()
+                for info in archive.infolist()
+                if info.filename and not info.is_dir()
+            }
+    except SyncError:
+        raise
+    except (OSError, zipfile.BadZipFile) as error:
+        raise SyncError(
+            f"direct release executable has no embedded program payload: {path}; "
+            "use LFPortable-x64.exe or LFPortable-arm64.exe from release assembly"
+        ) from error
+
+    missing = sorted(EMBEDDED_RELEASE_REQUIRED - names)
+    desktop_packages = sorted(
+        name for name in names
+        if name.startswith("codexdata/packages/lfportable-") and name.endswith(".msix")
+    )
+    source_name = path.name.casefold()
+    if source_name == "lfportable-x64.exe":
+        expected_package = "codexdata/packages/lfportable-x64.msix"
+        if expected_package not in names:
+            missing.append(expected_package)
+    elif source_name == "lfportable-arm64.exe":
+        expected_package = "codexdata/packages/lfportable-arm64.msix"
+        if expected_package not in names:
+            missing.append(expected_package)
+    if len(desktop_packages) != 1:
+        raise SyncError(
+            f"direct release executable must embed exactly one desktop package: {path}"
+        )
+    if missing:
+        raise SyncError(
+            "direct release executable is missing embedded release inputs: "
+            f"{', '.join(sorted(set(missing)))}; rebuild the self-extracting release"
+        )
     return path
 
 
@@ -474,6 +529,7 @@ def release_sources(source: Path, architecture: str | None = None) -> list[tuple
                 "use --architecture when both LFPortable-x64.exe and LFPortable-arm64.exe are present"
             )
         executable = require_regular_file(candidates[0], "direct release executable")
+        require_embedded_release_executable(executable)
         return [("CodexPortable.exe", executable)]
 
     if not source.is_dir():
