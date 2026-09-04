@@ -27,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.9")]
-[assembly: AssemblyFileVersion("1.4.24.9")]
+[assembly: AssemblyVersion("1.4.24.10")]
+[assembly: AssemblyFileVersion("1.4.24.10")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -1807,11 +1807,13 @@ namespace CodexPortable
                         try { relative = NormalizeArchivePath(line.Substring(2)); }
                         catch { relative = string.Empty; }
                         long length;
+                        bool matchedFile = false;
                         lock (sync)
                         {
                             if (relative.Length != 0 && current.Files.TryGetValue(relative, out length) &&
                                 reportedFiles.Add(relative))
                             {
+                                matchedFile = true;
                                 completedBytes = checked(completedBytes + length);
                                 completedFiles++;
                                 if (reporter.ElapsedMilliseconds >= ProgressReportIntervalMilliseconds ||
@@ -1821,6 +1823,22 @@ namespace CodexPortable
                                     reportBytes = completedBytes;
                                     reportFiles = completedFiles;
                                     reporter.Restart();
+                                }
+                            }
+                        }
+                        // A verbose directory line is expected, but a line that
+                        // looks like an extracted file and does not match the
+                        // validated archive must remain visible in the failure
+                        // diagnostics instead of being silently treated as progress.
+                        if (!matchedFile &&
+                            (relative.Length == 0 || !line.EndsWith("/", StringComparison.Ordinal)))
+                        {
+                            lock (sync)
+                            {
+                                if (diagnostics.Length < 32768)
+                                {
+                                    if (diagnostics.Length != 0) diagnostics.Append(" | ");
+                                    diagnostics.Append(line);
                                 }
                             }
                         }
@@ -1844,7 +1862,10 @@ namespace CodexPortable
 
                 ProcessStartInfo info = new ProcessStartInfo();
                 info.FileName = tar;
-                info.Arguments = "-xvf " + IOUtil.QuoteArgument(archivePath) + " -C " +
+                // exFAT rejects several timestamps present in the runtime
+                // package. Content extraction must not depend on restoring
+                // archive metadata, so ask bsdtar to leave mtimes untouched.
+                info.Arguments = "-xvmf " + IOUtil.QuoteArgument(archivePath) + " -C " +
                     IOUtil.QuoteArgument(staging);
                 info.WorkingDirectory = staging;
                 info.UseShellExecute = false;
