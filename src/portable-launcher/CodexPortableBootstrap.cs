@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.10")]
-[assembly: AssemblyFileVersion("1.4.24.10")]
+[assembly: AssemblyVersion("1.4.24.11")]
+[assembly: AssemblyFileVersion("1.4.24.11")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -84,6 +84,11 @@ namespace CodexPortableBootstrap
                 childArguments.Add(Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
                 childArguments.Add("--bootstrapper-path");
                 childArguments.Add(Assembly.GetExecutingAssembly().Location);
+                // A formally assembled single-file release is the user-facing
+                // entry point.  Carry an internal handoff hint so the
+                // architecture launcher starts the desktop automatically after
+                // its preparation checks instead of waiting for a second click.
+                childArguments.Add("--auto-start");
                 for (int i = 0; i < args.Length; i++) childArguments.Add(args[i]);
 
                 string launchArguments = JoinArguments(childArguments);

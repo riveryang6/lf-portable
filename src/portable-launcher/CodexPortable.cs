@@ -27,8 +27,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.10")]
-[assembly: AssemblyFileVersion("1.4.24.10")]
+[assembly: AssemblyVersion("1.4.24.11")]
+[assembly: AssemblyFileVersion("1.4.24.11")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -47,6 +47,7 @@ namespace CodexPortable
             string rootTokenOverride = null;
             string bootstrapperPathOverride = null;
             int bootstrapperProcessId = 0;
+            bool autoStart = false;
             List<string> forwardedArgs = new List<string>();
             for (int i = 0; i < args.Length; i++)
             {
@@ -90,6 +91,10 @@ namespace CodexPortable
                     bootstrapperPathOverride = args[i].Substring("--bootstrapper-path=".Length);
                     if (string.IsNullOrEmpty(bootstrapperPathOverride)) return 41;
                 }
+                else if (string.Equals(args[i], "--auto-start", StringComparison.OrdinalIgnoreCase))
+                {
+                    autoStart = true;
+                }
                 else forwardedArgs.Add(args[i]);
             }
             args = forwardedArgs.ToArray();
@@ -131,7 +136,7 @@ namespace CodexPortable
                     PortableBranding.InitializeProcessIdentity();
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    Application.Run(new PortableForm(layout));
+                    Application.Run(new PortableForm(layout, autoStart));
                     return 0;
                 }
                 catch (Exception ex)
@@ -5117,6 +5122,7 @@ namespace CodexPortable
         private bool startupStatePrepared;
         private bool startupInitializationRunning;
         private bool requiredPluginCacheValidated;
+        private readonly bool autoStart;
         private Task<StartupInitialization> startupTask;
         private bool closeRequestedDuringStartup;
         private bool updatingLanguage;
@@ -5145,9 +5151,10 @@ namespace CodexPortable
             }
         }
 
-        internal PortableForm(PortableLayout p)
+        internal PortableForm(PortableLayout p, bool startAutomatically)
         {
             layout = p;
+            autoStart = startAutomatically;
             LauncherLocale.Load(layout);
             Text = "LF Portable · Codex";
             Icon = PortableBranding.LoadLauncherIcon();
@@ -5469,11 +5476,13 @@ namespace CodexPortable
                 if (initialization.BundledPayloadAvailable && !portablePayloadPreflight)
                 {
                     RefreshStatus(LauncherLocale.T("就绪", "Ready"));
+                    ScheduleAutomaticStart(initialization.ApiConfigured);
                     return;
                 }
                 if (initialization.ApiConfigured)
                 {
                     RefreshStatus(LauncherLocale.T("就绪", "Ready"));
+                    ScheduleAutomaticStart(true);
                 }
                 else
                 {
@@ -5495,6 +5504,24 @@ namespace CodexPortable
                 status.Text = LauncherLocale.T("便携环境检查失败", "Portable environment check failed");
                 details.Text = string.Empty;
             }
+        }
+
+        private void ScheduleAutomaticStart(bool apiConfigured)
+        {
+            if (!autoStart || !apiConfigured || formIsClosing || IsDisposed || Disposing) return;
+            // FormShown is an async event handler. Queue the click only after
+            // the initialization continuation has returned to the UI loop so
+            // the normal StartClicked workflow owns all preparation and error
+            // handling paths.
+            try
+            {
+                BeginInvoke(new MethodInvoker(delegate
+                {
+                    if (!formIsClosing && !busy && !startWorkflowRunning && !IsDisposed && !Disposing)
+                        StartClicked(this, EventArgs.Empty);
+                }));
+            }
+            catch (InvalidOperationException) { }
         }
 
         private void CloseAfterStartupInitialization()
