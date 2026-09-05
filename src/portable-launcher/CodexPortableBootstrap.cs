@@ -20,12 +20,30 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.13")]
-[assembly: AssemblyFileVersion("1.4.24.13")]
+[assembly: AssemblyVersion("1.4.24.14")]
+[assembly: AssemblyFileVersion("1.4.24.14")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
 {
+    internal static class BootLog
+    {
+        internal static void Write(string portableRoot, string message)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(portableRoot)) return;
+                string logs = Path.Combine(portableRoot, "CodexData", "logs");
+                Directory.CreateDirectory(logs);
+                string file = Path.Combine(logs, "bootstrap-" +
+                    DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".log");
+                File.AppendAllText(file, DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) +
+                    " [" + message + "]" + Environment.NewLine);
+            }
+            catch { }
+        }
+    }
+
     internal static class Program
     {
         private const ushort ImageFileMachineI386 = 0x014c;
@@ -74,7 +92,9 @@ namespace CodexPortableBootstrap
                     Assembly.GetExecutingAssembly().Location));
                 string rootToken = PortableRootIdentity.GetExecutionRootToken(root);
                 string architecture = DetectNativeArchitecture();
+                BootLog.Write(root, "bootstrap start root=" + root + " arch=" + architecture);
                 EnsureEmbeddedPayload(root, rootToken, architecture);
+                BootLog.Write(root, "payload ensured, launching architecture launcher");
                 List<string> childArguments = new List<string>();
                 childArguments.Add("--portable-root");
                 childArguments.Add(root);
@@ -133,6 +153,13 @@ namespace CodexPortableBootstrap
             }
             catch (Exception ex)
             {
+                try
+                {
+                    string exe = Assembly.GetExecutingAssembly().Location;
+                    BootLog.Write(Path.GetDirectoryName(exe), "bootstrap fatal " +
+                        ex.GetType().Name + ": " + ex.Message + " @ " + ex.StackTrace);
+                }
+                catch { }
                 MessageBox.Show("Codex Portable architecture bootstrap failed.\r\n\r\n" +
                     ex.GetType().Name + ": " + ex.Message, "Codex Portable",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -353,8 +380,12 @@ namespace CodexPortableBootstrap
                 for (int i = 0; i < planned.Count; i++)
                     totalBytes = checked(totalBytes + planned[i].ArchiveEntry.Length);
                 EnsureFreeSpace(portableRoot, totalBytes);
+                BootLog.Write(portableRoot, "plan built replace=" + replaceExisting +
+                    " entries=" + planned.Count.ToString(CultureInfo.InvariantCulture) +
+                    " bytes=" + totalBytes.ToString(CultureInfo.InvariantCulture));
                 ExtractReleaseInputs(portableRoot, dataRoot, dataExists, rootToken,
                     replaceExisting, planned, totalBytes);
+                BootLog.Write(portableRoot, "ExtractReleaseInputs returned");
             }
             finally
             {
@@ -665,6 +696,7 @@ namespace CodexPortableBootstrap
                 Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "-" +
                 Guid.NewGuid().ToString("N");
             string stagingRoot = Path.Combine(portableRoot, stagingName);
+            BootLog.Write(portableRoot, "extract begin dataExists=" + dataExists);
             PayloadProgressForm progress = null;
             List<DerivedStateEntry> movedDerived = null;
             bool retainStaging = false;
@@ -689,6 +721,7 @@ namespace CodexPortableBootstrap
                         string staged = Path.Combine(stagingRoot,
                             item.RelativePath.Substring(DataPrefix.Length)
                                 .Replace('/', Path.DirectorySeparatorChar));
+                        BootLog.Write(portableRoot, "payload entry " + item.RelativePath);
                         string stagedParent = Path.GetDirectoryName(staged);
                         EnsureSafeDirectory(stagingRoot, stagedParent);
                         long written = 0;
@@ -728,6 +761,7 @@ namespace CodexPortableBootstrap
 
                 if (entries.Count != 0)
                 {
+                    BootLog.Write(portableRoot, "mutation acquire begin");
                     mutation = new Mutex(false,
                         "Global\\CodexPortable-Desktop-" + rootToken + "-mutation");
                     try { mutationAcquired = mutation.WaitOne(0, false); }
@@ -742,12 +776,16 @@ namespace CodexPortableBootstrap
                 }
                 if (replaceExisting)
                 {
+                    BootLog.Write(portableRoot, "move-derived begin");
                     // Move package-owned derived state out of the way before any
                     // release input is replaced. User data, logs, keys, SQLite,
                     // and unknown entries below CodexData are never visited.
                     movedDerived = new List<DerivedStateEntry>();
                     MoveDerivedStateToBackup(portableRoot, stagingRoot,
                         movedDerived);
+                    BootLog.Write(portableRoot, "move-derived done moved=" +
+                        (movedDerived == null ? 0 : movedDerived.Count).ToString(
+                            CultureInfo.InvariantCulture));
                 }
 
                 // Each release-owned file is replaced with a same-volume rename.
@@ -771,7 +809,9 @@ namespace CodexPortableBootstrap
                         }
                     }
                     MoveAtomically(staged, item.TargetPath, replaceItem);
+                    BootLog.Write(portableRoot, "committed " + item.RelativePath);
                 }
+                BootLog.Write(portableRoot, "commit loop done");
             }
             catch (Exception upgradeError)
             {
@@ -796,6 +836,7 @@ namespace CodexPortableBootstrap
                     progress.Close();
                     progress.Dispose();
                 }
+                BootLog.Write(portableRoot, "progress closed");
                 if (mutation != null)
                 {
                     try { if (mutationAcquired) mutation.ReleaseMutex(); }
