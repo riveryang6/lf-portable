@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.16")]
-[assembly: AssemblyFileVersion("1.4.24.16")]
+[assembly: AssemblyVersion("1.4.24.17")]
+[assembly: AssemblyFileVersion("1.4.24.17")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -1178,6 +1178,7 @@ namespace CodexPortable
         internal string BaseUrlFile;
         internal string ModelFile;
         internal string ModelCatalogFile;
+        internal string PiCacheFile;
         internal string LanguageFile;
         internal string Downloads;
         internal string ChromiumCache;
@@ -1256,6 +1257,7 @@ namespace CodexPortable
             p.BaseUrlFile = Path.Combine(p.DataRoot, "data", "config", "custom-api-url.txt");
             p.ModelFile = Path.Combine(p.DataRoot, "data", "config", "custom-model.txt");
             p.ModelCatalogFile = Path.Combine(p.DataRoot, "data", "config", "model-catalog.json");
+            p.PiCacheFile = Path.Combine(p.DataRoot, "data", "config", "pi-model-cache.json");
             p.LanguageFile = Path.Combine(p.DataRoot, "data", "config", "launcher-language.txt");
             p.Downloads = Path.Combine(p.DataRoot, "data", "downloads");
             p.ChromiumCache = Path.Combine(p.Profile, "cache", "chromium");
@@ -8012,6 +8014,7 @@ namespace CodexPortable
         internal const string DefaultModel = "gpt-5.6-terra";
         internal const string DefaultFollowUpQueueMode = "steer";
         private const string PiModelsUrl = "https://pi.dev/api/models";
+        private const string PiCacheResourceName = "CodexPortable.PiModelsCache.json";
         private const int ModelCatalogMaximumBytes = 16 * 1024 * 1024;
         private const int ModelCatalogTimeoutMilliseconds = 8000;
         private const int BundledModelTemplateTimeoutMilliseconds = 30000;
@@ -8313,6 +8316,65 @@ namespace CodexPortable
             IOUtil.AtomicWriteText(layout.ModelFile, model + "\r\n");
         }
 
+        private static void PersistPiCache(PortableLayout layout,
+            Dictionary<string, object> piRoot)
+        {
+            try
+            {
+                if (layout == null || piRoot == null || piRoot.Count == 0) return;
+                layout.EnsureDirectories();
+                string json = CreateJsonSerializer(ModelCatalogMaximumBytes).Serialize(piRoot);
+                if (Encoding.UTF8.GetByteCount(json) > ModelCatalogMaximumBytes) return;
+                IOUtil.AtomicWriteText(layout.PiCacheFile, json);
+            }
+            catch
+            {
+                // A cache write must never block model catalog refresh.
+            }
+        }
+
+        private static Dictionary<string, object> ReadPiCache(PortableLayout layout)
+        {
+            // 1) newest disk cache written by an earlier successful refresh,
+            // 2) the snapshot embedded into this release,
+            // 3) none.
+            if (layout != null && File.Exists(layout.PiCacheFile))
+            {
+                try
+                {
+                    FileInfo info = new FileInfo(layout.PiCacheFile);
+                    if (info.Length > 0 && info.Length <= ModelCatalogMaximumBytes)
+                    {
+                        Dictionary<string, object> cached = ParseJsonObject(
+                            File.ReadAllText(layout.PiCacheFile, Encoding.UTF8),
+                            ModelCatalogMaximumBytes);
+                        if (cached != null && cached.Count != 0) return cached;
+                    }
+                }
+                catch { }
+            }
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream(PiCacheResourceName))
+                {
+                    if (stream == null || stream.Length <= 0 ||
+                        stream.Length > ModelCatalogMaximumBytes) return null;
+                    using (StreamReader reader = new StreamReader(stream,
+                        new UTF8Encoding(false, true), true, 4096))
+                    {
+                        Dictionary<string, object> embedded = ParseJsonObject(
+                            reader.ReadToEnd(), ModelCatalogMaximumBytes);
+                        return embedded != null && embedded.Count != 0 ? embedded : null;
+                    }
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         internal static int RefreshModelCatalog(PortableLayout layout, string baseUrl,
             string apiKey, string selectedModel)
         {
@@ -8334,11 +8396,14 @@ namespace CodexPortable
             try
             {
                 piRoot = DownloadJsonObject(PiModelsUrl, null, ModelCatalogMaximumBytes);
+                PersistPiCache(layout, piRoot);
             }
             catch
             {
                 // pi.dev is enrichment data. Gateway IDs remain authoritative
-                // when the public metadata service is unavailable.
+                // when the public metadata service is unavailable; use the
+                // newest cached snapshot so enrichment still works offline.
+                piRoot = ReadPiCache(layout);
             }
             Dictionary<string, List<PiModelCandidate>> piIndex =
                 BuildPiModelIndex(piRoot);

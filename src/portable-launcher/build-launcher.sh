@@ -73,6 +73,7 @@ build_target() {
     )
     if [[ $source == "$core_source" ]]; then
         compiler_args+=("/resource:$fallback_prompt_path,CodexPortable.ModelFallbackPrompt.txt")
+        compiler_args+=("/resource:$pi_cache_path,CodexPortable.PiModelsCache.json")
     fi
     local reference
     for reference in "${references[@]}"; do
@@ -177,8 +178,9 @@ tray_dark_path="$script_dir/codex-tray-dark.ico"
 tray_light_path="$script_dir/codex-tray-light.ico"
 manifest_path="$script_dir/CodexPortable.manifest"
 fallback_prompt_path="$script_dir/CodexModelFallbackPrompt.txt"
+pi_cache_path="$script_dir/pi-models-cache.json"
 for input_path in "$core_source" "$bootstrap_source" "$icon_path" "$tray_dark_path" \
-    "$tray_light_path" "$manifest_path" "$fallback_prompt_path"; do
+    "$tray_light_path" "$manifest_path" "$fallback_prompt_path" "$pi_cache_path"; do
     require_file "$input_path"
 done
 

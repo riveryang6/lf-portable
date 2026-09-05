@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.16")]
-[assembly: AssemblyFileVersion("1.4.24.16")]
+[assembly: AssemblyVersion("1.4.24.17")]
+[assembly: AssemblyFileVersion("1.4.24.17")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
