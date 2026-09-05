@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.17")]
-[assembly: AssemblyFileVersion("1.4.24.17")]
+[assembly: AssemblyVersion("1.4.24.18")]
+[assembly: AssemblyFileVersion("1.4.24.18")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -762,7 +762,7 @@ namespace CodexPortableBootstrap
                 if (entries.Count != 0)
                 {
                     if (progress != null)
-                        progress.UpdateStatus("正在提交更新 / Committing update");
+                        progress.UpdateStatus("正在更新程序文件 / Updating program files");
                     BootLog.Write(portableRoot, "mutation acquire begin");
                     mutation = new Mutex(false,
                         "Global\\CodexPortable-Desktop-" + rootToken + "-mutation");
@@ -812,7 +812,19 @@ namespace CodexPortableBootstrap
                             continue;
                         }
                     }
-                    MoveAtomically(staged, item.TargetPath, replaceItem);
+                    if (replaceItem && item.ArchiveEntry.Length > LargeCommitStreamThreshold &&
+                        File.Exists(staged))
+                    {
+                        // A same-volume rename normally is instant, but on slow
+                        // removable media a locked/exFAT rename can stall for
+                        // minutes with no way to pump the window.  Stream large
+                        // inputs into place with visible progress instead.
+                        CommitStagedLargeFile(staged, item.TargetPath, progress);
+                    }
+                    else
+                    {
+                        MoveAtomically(staged, item.TargetPath, replaceItem);
+                    }
                     if (progress != null) progress.Pump();
                     BootLog.Write(portableRoot, "committed " + item.RelativePath);
                 }
@@ -1198,6 +1210,48 @@ namespace CodexPortableBootstrap
 
         private const uint MoveFileReplaceExisting = 0x00000001U;
         private const uint MoveFileWriteThrough = 0x00000008U;
+
+        private const long LargeCommitStreamThreshold = 32L * 1024L * 1024L;
+
+        private static void CommitStagedLargeFile(string source, string destination,
+            PayloadProgressForm progress)
+        {
+            FileInfo sourceInfo = new FileInfo(source);
+            if (PathExists(destination))
+            {
+                FileAttributes attributes = File.GetAttributes(destination);
+                if ((attributes & FileAttributes.Directory) != 0)
+                    throw new IOException("Atomic input destination is a directory: " + destination);
+                File.Delete(destination);
+            }
+            byte[] buffer = new byte[CopyBufferSize];
+            try
+            {
+                using (FileStream input = new FileStream(source, FileMode.Open,
+                    FileAccess.Read, FileShare.Read, CopyBufferSize,
+                    FileOptions.SequentialScan))
+                using (FileStream output = new FileStream(destination, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None, CopyBufferSize,
+                    FileOptions.SequentialScan))
+                {
+                    long written = 0;
+                    int read;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+                    {
+                        output.Write(buffer, 0, read);
+                        written = checked(written + read);
+                        if (progress != null)
+                            progress.PulseCopy(written, sourceInfo.Length);
+                    }
+                    output.Flush(true);
+                    if (written != sourceInfo.Length)
+                        throw new InvalidDataException(
+                            "The staged input ended unexpectedly: " + source);
+                }
+            }
+            finally { Array.Clear(buffer, 0, buffer.Length); }
+            File.Delete(source);
+        }
 
         private static void MoveAtomically(string source, string destination,
             bool replaceExisting)
@@ -1719,6 +1773,16 @@ namespace CodexPortableBootstrap
         internal void UpdateStatus(string text)
         {
             status.Text = text ?? status.Text;
+            Pump();
+        }
+
+        internal void PulseCopy(long completedBytes, long totalBytes)
+        {
+            if (uiUpdate.ElapsedMilliseconds < 100) return;
+            uiUpdate.Restart();
+            details.Text = string.Format(CultureInfo.InvariantCulture,
+                "{0:0.0} / {1:0.0} MB  ·  " + status.Text, completedBytes / 1048576.0,
+                totalBytes / 1048576.0);
             Pump();
         }
 
