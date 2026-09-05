@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.14")]
-[assembly: AssemblyFileVersion("1.4.24.14")]
+[assembly: AssemblyVersion("1.4.24.15")]
+[assembly: AssemblyFileVersion("1.4.24.15")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -761,6 +761,8 @@ namespace CodexPortableBootstrap
 
                 if (entries.Count != 0)
                 {
+                    if (progress != null)
+                        progress.UpdateStatus("正在提交更新 / Committing update");
                     BootLog.Write(portableRoot, "mutation acquire begin");
                     mutation = new Mutex(false,
                         "Global\\CodexPortable-Desktop-" + rootToken + "-mutation");
@@ -773,6 +775,7 @@ namespace CodexPortableBootstrap
                     // desktop is alive. The job and executable-path checks cover
                     // both current and older launcher handoffs.
                     EnsurePortableDesktopStopped(portableRoot, rootToken);
+                    if (progress != null) progress.Pump();
                 }
                 if (replaceExisting)
                 {
@@ -786,6 +789,7 @@ namespace CodexPortableBootstrap
                     BootLog.Write(portableRoot, "move-derived done moved=" +
                         (movedDerived == null ? 0 : movedDerived.Count).ToString(
                             CultureInfo.InvariantCulture));
+                    if (progress != null) progress.Pump();
                 }
 
                 // Each release-owned file is replaced with a same-volume rename.
@@ -809,8 +813,11 @@ namespace CodexPortableBootstrap
                         }
                     }
                     MoveAtomically(staged, item.TargetPath, replaceItem);
+                    if (progress != null) progress.Pump();
                     BootLog.Write(portableRoot, "committed " + item.RelativePath);
                 }
+                if (progress != null)
+                    progress.UpdateStatus("正在准备 Codex Portable / Preparing Codex Portable");
                 BootLog.Write(portableRoot, "commit loop done");
             }
             catch (Exception upgradeError)
@@ -1195,8 +1202,11 @@ namespace CodexPortableBootstrap
         private static void MoveAtomically(string source, string destination,
             bool replaceExisting)
         {
-            uint flags = MoveFileWriteThrough |
-                (replaceExisting ? MoveFileReplaceExisting : 0U);
+            // Staged release files are already flushed while they are written.
+            // A second MOVEFILE_WRITE_THROUGH forces a whole-file durable flush
+            // on every update and can stall the UI for minutes on removable
+            // media.  Keep the atomic rename; the staged write is durable.
+            uint flags = replaceExisting ? MoveFileReplaceExisting : 0U;
             if (!MoveFileEx(source, destination, flags))
                 throw new Win32Exception(Marshal.GetLastWin32Error(),
                     "Atomic portable input replacement failed: " + destination);
@@ -1698,6 +1708,18 @@ namespace CodexPortableBootstrap
             Controls.Add(status);
             Controls.Add(progress);
             Controls.Add(details);
+        }
+
+        internal void Pump()
+        {
+            Refresh();
+            Application.DoEvents();
+        }
+
+        internal void UpdateStatus(string text)
+        {
+            status.Text = text ?? status.Text;
+            Pump();
         }
 
         internal void UpdateProgress(long completedBytes, long totalBytes,

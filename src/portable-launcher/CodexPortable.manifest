@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="CodexPortable.Launcher"
-    version="1.4.24.14"
+    version="1.4.24.15"
     processorArchitecture="*" />
 
   <!--
