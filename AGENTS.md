@@ -84,7 +84,16 @@
 - 不原样透传外部 model_messages：同 slug bundled 指令可复用，只允许受限 base_instructions 覆盖；无模型专属指令时使用嵌入的 CodexModelFallbackPrompt.txt（只嵌入架构 launcher，不嵌入裸 bootstrapper）。
 - 子进程读取 `codex debug models --bundled` 必须设置 `startInfo.StandardOutputEncoding = new UTF8Encoding(false)`：重定向 stdout 默认按控制台代码页解码，CJK/GBK 主机会把 UTF-8 JSON 读乱，导致模板集合为空并静默回退旧目录。
 
-### 测试与复现捷径
+#### 运行/交互验收优先使用 computer use
+
+本会话具备桌面 UI 自动化（find_roots / observe_ui / act_ui）与浏览器控制能力。凡需“看窗口、点按钮、填表单、读弹窗、确认运行状态”才能下结论的场景（含发布前真实启动验收的交互侧、对话框确认、U 盘/Sandbox 内操作），必须先亲自用这些工具操作并留下枚举/观察证据，不得把可自动化步骤以“请你在真机确认”的形式推回给用户。
+
+- 窗口可见性以实际枚举为准：先 find_roots / 枚举顶层窗口与类名（含 Chrome_WidgetWin_*），能观察到就 observe + act，必要时截图用视觉模型读内容。
+- 只有当多次尝试仍确认目标窗口不在本会话可见（如 Electron 窗口句柄 0、当前窗口站无该桌面），才能把视觉检查项留给用户，且必须说明已做尝试与证据、给出最小检查清单；不得把“没试过”说成“环境不支持”。
+- 弹窗/确认框在本项目范围内可直接自动点击（见上“用户已明确授权”条款），不要因等待用户点击而停下流程。
+- 官方 WindowsApps 进程与便携进程的窗口同样先枚举再判断；进程存活、交接日志与窗口内容应组合取证，避免仅凭“窗口看不见”判定未启动。
+
+## 测试与复现捷径
 
 - launcher、CLI、harness 都是 Windows PE：WSL 内不能直接 exec，需 `powershell.exe -NoProfile -Command "& 'winpath' args"` 运行，参数用 `wslpath -w` 转 Windows 路径。
 - 反射 harness（参考 `build/model-catalog-test/Harness.cs` 模式）可直接调 private static（RefreshModelCatalog / CreateCodexModelInfo / SelectPiMetadata / ReadBundledModelTemplates）做单元级验证；用 Roslyn csc（dotnet SDK 的 Roslyn/bincore/csc.dll）+ mono 4.8-api 引用编译 Windows 控制台 exe，这些 harness 与 fixture 目录都是任务临时产物，用后清理。

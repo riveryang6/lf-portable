@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.15")]
-[assembly: AssemblyFileVersion("1.4.24.15")]
+[assembly: AssemblyVersion("1.4.24.16")]
+[assembly: AssemblyFileVersion("1.4.24.16")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -5856,14 +5856,32 @@ namespace CodexPortable
                     List<string> cachedModels = ProviderConfiguration.ReadCatalogModelIds(layout);
                     if (cachedModels.Count == 0)
                     {
-                        SetBusy(false, null);
-                        MessageBox.Show(LauncherLocale.T(
-                            "无法获取自定义 API 的模型列表，首次启动需要模型目录才能继续。请检查网络和 API 配置后重试。",
-                            "Unable to retrieve the custom API model list. The first startup requires a model catalog. Check the network and API configuration, then retry."),
-                            LauncherLocale.T("无法获取模型列表", "Model list unavailable"),
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        FinishStartWorkflow();
-                        return;
+                        // Gateway unreachable on a fresh root must not lock the
+                        // desktop out.  Fall back to an offline single-model
+                        // catalog and let a later start refresh it.
+                        ProviderConfiguration.EnsureOfflineFallbackCatalog(layout, model);
+                        SafeLog.TryWriteEvent(layout, "model-catalog-offline-fallback",
+                            "Gateway unreachable; started with an offline fallback catalog for model " + model);
+                    }
+                    if (cachedModels.Count != 0)
+                    {
+                        try
+                        {
+                            ProviderConfiguration.SelectFirstCatalogModelIfMissing(layout, model,
+                                cachedModels);
+                        }
+                        catch (Exception selectionError)
+                        {
+                            SafeLog.TryWrite(layout, "model-catalog-selection", selectionError);
+                            SetBusy(false, null);
+                            MessageBox.Show(LauncherLocale.T(
+                                "无法从上一次模型目录恢复有效模型。请检查便携数据盘后重试。",
+                                "Unable to restore a valid model from the previous catalog. Check the portable data drive and retry."),
+                                LauncherLocale.T("无法恢复模型", "Unable to restore model"),
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            FinishStartWorkflow();
+                            return;
+                        }
                     }
                     try
                     {
@@ -8272,6 +8290,27 @@ namespace CodexPortable
             return ReadGatewayModels(new Dictionary<string, object> {
                 { "data", rootArray }
             });
+        }
+
+        internal static void EnsureOfflineFallbackCatalog(PortableLayout layout,
+            string model)
+        {
+            // A first run must not become unusable because the gateway is
+            // unreachable.  When no previous catalog exists, materialize a
+            // minimal offline catalog from the configured model so Codex can
+            // start and retry the gateway refresh on later starts.  The
+            // desktop cannot send messages without the gateway, but the UI and
+            // the configured model stay available.
+            if (layout == null || !IsValidModel(model)) return;
+            if (ReadCatalogModelIds(layout).Count != 0) return;
+            List<object> models = new List<object>();
+            Dictionary<string, object> gateway = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            gateway["id"] = model;
+            models.Add(CreateCodexModelInfo(model, gateway, null, null,
+                DefaultModelInstructions, 1));
+            WriteModelCatalog(layout, models.ToArray());
+            IOUtil.AtomicWriteText(layout.ModelFile, model + "\r\n");
         }
 
         internal static int RefreshModelCatalog(PortableLayout layout, string baseUrl,
