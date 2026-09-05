@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Copy a portable release onto the explicitly labelled CODEX_USB volume."""
+"""Copy a portable release onto a volume that carries the portable entry.
+
+A drive is accepted when it is labelled CODEX_USB (legacy signal) or when its
+root contains CodexPortable.exe (the marker of a previously deployed portable
+root); the label itself is not a requirement.
+"""
 
 from __future__ import annotations
 
@@ -281,7 +286,17 @@ def cmd_unicode(command: str, purpose: str) -> str:
     return decode_windows_unicode(completed.stdout)
 
 
-def ensure_codex_usb_volume(target_windows_path: str | None) -> None:
+def ensure_codex_usb_volume(
+    target_windows_path: str | None, target: Path
+) -> None:
+    """Accept the target drive as an updatable portable volume.
+
+    A drive is updatable when it is labelled CODEX_USB or when its root
+    already carries the deployed portable entry (CodexPortable.exe).  The
+    label is a convenience signal, not the contract: a stick that was named
+    differently but deployed by an earlier release is still a valid target.
+    """
+
     if target_windows_path is None:
         raise SyncError(
             "cannot determine the USB volume for --usb-root; use /mnt/<drive>/... "
@@ -297,10 +312,52 @@ def ensure_codex_usb_volume(target_windows_path: str | None) -> None:
         rf"(?<![A-Za-z0-9_]){re.escape(USB_LABEL)}(?![A-Za-z0-9_])",
         re.IGNORECASE,
     )
-    if exact_label.search(volume_output) is None:
-        raise SyncError(
-            f"cannot confirm that --usb-root is on a volume labelled {USB_LABEL}"
-        )
+    if exact_label.search(volume_output) is not None:
+        return
+
+    if portable_root_marker(target) is not None:
+        return
+    raise SyncError(
+        f"cannot confirm that --usb-root is an updatable portable volume: "
+        f"drive {drive_letter}: is neither labelled {USB_LABEL} nor does its "
+        "root contain the portable entry CodexPortable.exe"
+    )
+
+
+def portable_root_marker(target: Path) -> Path | None:
+    """Return the root CodexPortable.exe when it already marks this drive.
+
+    The marker must be a regular PE file at the volume root (the assembled
+    portable entry deployed by an earlier release).  A bare bootstrapper is
+    rejected by the source-role checks before anything is copied; here the
+    marker only identifies an existing portable volume.
+    """
+
+    try:
+        root = target if target.is_dir() else target.parent
+        root.resolve(strict=False)
+    except OSError:
+        return None
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        try:
+            if entry.name.casefold() != "codexportable.exe":
+                continue
+            if not entry.is_file() or entry.is_symlink():
+                continue
+            info = entry.stat()
+            if info.st_size <= 0:
+                continue
+            with entry.open("rb") as handle:
+                if handle.read(2) == b"MZ":
+                    return entry
+        except OSError:
+            continue
+    return None
+
 
 
 PROCESS_HELPER_SOURCE = r"""var locator = new ActiveXObject("WbemScripting.SWbemLocator");
@@ -749,7 +806,7 @@ def execute(args: argparse.Namespace) -> None:
     source_windows_input = args.source_root if source.is_dir() else str(source.parent)
     source_windows_path = windows_path(source_windows_input, source_directory)
     target_windows_path = windows_path(args.usb_root, target)
-    ensure_codex_usb_volume(target_windows_path)
+    ensure_codex_usb_volume(target_windows_path, target)
     assert target_windows_path is not None
     wait_for_processes_to_exit(target_windows_path, args.wait_for_portable_exit_seconds)
     validate_target_paths(target, files)

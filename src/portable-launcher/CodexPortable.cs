@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.12")]
-[assembly: AssemblyFileVersion("1.4.24.12")]
+[assembly: AssemblyVersion("1.4.24.13")]
+[assembly: AssemblyFileVersion("1.4.24.13")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -7983,7 +7983,7 @@ namespace CodexPortable
         internal const string DefaultApprovalPolicy = "never";
         internal const string DefaultSandboxMode = "danger-full-access";
         internal const string DefaultReasoningEffort = "max";
-        internal const string DefaultModel = "gpt-6-astra";
+        internal const string DefaultModel = "gpt-5.6-terra";
         internal const string DefaultFollowUpQueueMode = "steer";
         private const string PiModelsUrl = "https://pi.dev/api/models";
         private const int ModelCatalogMaximumBytes = 16 * 1024 * 1024;
@@ -11254,7 +11254,13 @@ namespace CodexPortable
         private readonly TextBox keyBox;
         private readonly TextBox baseUrlBox;
         private readonly ComboBox modelBox;
+        private readonly Label modelStatusLabel;
+        private readonly System.Windows.Forms.Timer prefetchTimer;
         private KeySetupResult result;
+        private bool prefetchRunning;
+        private bool prefetchAgain;
+        private int prefetchVersion;
+        private const int ModelPrefetchDelayMilliseconds = 800;
 
         private KeySetupDialog(string currentBaseUrl, string currentModel, string currentApiKey,
             IList<string> catalogModelIds)
@@ -11266,7 +11272,7 @@ namespace CodexPortable
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 360);
+            ClientSize = new Size(560, 384);
             BackColor = Color.FromArgb(244, 246, 248);
 
             Panel header = new Panel();
@@ -11298,8 +11304,8 @@ namespace CodexPortable
             baseUrlBox.MaxLength = 2048;
             baseUrlBox.Text = currentBaseUrl ?? "";
 
-            AddLabel(LauncherLocale.T("网关模型名", "Gateway model"), 26, 166, 508);
-            modelBox = AddModelComboBox(26, 188, 508);
+            AddLabel(LauncherLocale.T("网关模型名 / 默认模型", "Gateway model / default model"), 26, 164, 508);
+            modelBox = AddModelComboBox(26, 186, 508);
             modelBox.MaxLength = 512;
             if (catalogModelIds != null)
             {
@@ -11314,13 +11320,34 @@ namespace CodexPortable
             if (ProviderConfiguration.IsValidModel(currentModel) &&
                 modelBox.Items.IndexOf(currentModel) < 0)
                 modelBox.Items.Insert(0, currentModel);
-            modelBox.Text = currentModel ?? "";
+            modelBox.Text = SelectDefaultModel(currentModel, modelBox.Items);
 
-            AddLabel(LauncherLocale.T("API Key", "API key"), 26, 234, 508);
-            keyBox = AddTextBox(26, 256, 508, true);
+            modelStatusLabel = new Label();
+            modelStatusLabel.Location = new Point(26, 216);
+            modelStatusLabel.Size = new Size(508, 18);
+            modelStatusLabel.Font = new Font(Font.FontFamily, 8F);
+            modelStatusLabel.ForeColor = Color.FromArgb(100, 116, 139);
+            modelStatusLabel.Text = LauncherLocale.T(
+                "输入 API URL 与 Key 后会自动从网关读取模型列表，在框中选择默认模型；网关不可达时可手动输入。",
+                "The model list is loaded from the gateway once you enter the API URL and key; choose the default model from the box, or type one when the gateway is unreachable.");
+            Controls.Add(modelStatusLabel);
+
+            AddLabel(LauncherLocale.T("API Key", "API key"), 26, 242, 508);
+            keyBox = AddTextBox(26, 264, 508, true);
             keyBox.MaxLength = 1024;
             keyBox.UseSystemPasswordChar = true;
             keyBox.Text = currentApiKey ?? "";
+
+            prefetchTimer = new System.Windows.Forms.Timer();
+            prefetchTimer.Interval = ModelPrefetchDelayMilliseconds;
+            prefetchTimer.Tick += delegate
+            {
+                prefetchTimer.Stop();
+                StartModelPrefetch();
+            };
+            baseUrlBox.TextChanged += delegate { ScheduleModelPrefetch(); };
+            keyBox.TextChanged += delegate { ScheduleModelPrefetch(); };
+            ScheduleModelPrefetch();
 
             Button save = new Button();
             save.Text = LauncherLocale.T("保存", "Save");
@@ -11390,6 +11417,116 @@ namespace CodexPortable
             box.ForeColor = Color.FromArgb(15, 23, 42);
             Controls.Add(box);
             return box;
+        }
+
+        private static string SelectDefaultModel(string currentModel,
+            ComboBox.ObjectCollection items)
+        {
+            if (ProviderConfiguration.IsValidModel(currentModel)) return currentModel;
+            string fallback = ProviderConfiguration.DefaultModel;
+            for (int i = 0; i < items.Count; i++)
+            {
+                string candidate = items[i] as string;
+                if (string.Equals(candidate, fallback, StringComparison.Ordinal))
+                    return fallback;
+            }
+            if (items.Count > 0) return items[0] as string;
+            return fallback;
+        }
+
+        private void ScheduleModelPrefetch()
+        {
+            if (prefetchTimer == null) return;
+            if (prefetchRunning)
+            {
+                prefetchAgain = true;
+                return;
+            }
+            prefetchTimer.Stop();
+            prefetchTimer.Start();
+        }
+
+        private void StartModelPrefetch()
+        {
+            if (prefetchRunning) return;
+            string baseUrl;
+            string key = keyBox.Text.Trim();
+            if (!ProviderConfiguration.TryNormalizeBaseUrl(baseUrlBox.Text, out baseUrl) ||
+                !ProviderConfiguration.IsValidApiKey(key)) return;
+            prefetchRunning = true;
+            int version = ++prefetchVersion;
+            SetModelStatus(LauncherLocale.T("正在从网关读取模型列表…", "Loading model list from the gateway…"),
+                Color.FromArgb(100, 116, 139));
+            Task.Run(delegate
+            {
+                List<string> modelIds = null;
+                string errorText = null;
+                try
+                {
+                    modelIds = ProviderConfiguration.FetchGatewayModelIds(baseUrl, key);
+                }
+                catch (Exception ex)
+                {
+                    errorText = ex.Message;
+                }
+                BeginInvoke((Action)delegate
+                {
+                    if (prefetchVersion != version) return;
+                    prefetchRunning = false;
+                    if (modelIds == null)
+                    {
+                        SetModelStatus(LauncherLocale.T("无法从网关读取模型列表（网关不可达？可手动输入模型名）。",
+                            "Could not load the model list from the gateway (unreachable? you can type a model name)."),
+                            Color.FromArgb(217, 119, 6));
+                    }
+                    else if (modelIds.Count == 0)
+                    {
+                        SetModelStatus(LauncherLocale.T("网关返回的模型列表为空。", "The gateway returned an empty model list."),
+                            Color.FromArgb(190, 18, 60));
+                    }
+                    else
+                    {
+                        ApplyGatewayModelList(modelIds);
+                        SetModelStatus(LauncherLocale.T("已从网关读取 " + modelIds.Count.ToString() + " 个模型，请在框中选择默认模型。",
+                            "Loaded " + modelIds.Count.ToString() + " models from the gateway; choose the default model."),
+                            Color.FromArgb(5, 150, 105));
+                    }
+                    if (prefetchAgain)
+                    {
+                        prefetchAgain = false;
+                        ScheduleModelPrefetch();
+                    }
+                });
+            });
+        }
+
+        private void ApplyGatewayModelList(List<string> modelIds)
+        {
+            string previousText = modelBox.Text.Trim();
+            modelBox.Items.Clear();
+            for (int i = 0; i < modelIds.Count; i++)
+            {
+                if (ProviderConfiguration.IsValidModel(modelIds[i]) &&
+                    modelBox.Items.IndexOf(modelIds[i]) < 0)
+                    modelBox.Items.Add(modelIds[i]);
+            }
+            string selected = null;
+            if (ProviderConfiguration.IsValidModel(previousText) &&
+                modelBox.Items.IndexOf(previousText) >= 0)
+                selected = previousText;
+            if (selected == null &&
+                modelBox.Items.IndexOf(ProviderConfiguration.DefaultModel) >= 0)
+                selected = ProviderConfiguration.DefaultModel;
+            if (selected == null && modelBox.Items.Count > 0)
+                selected = modelBox.Items[0] as string;
+            modelBox.Text = ProviderConfiguration.IsValidModel(selected) ? selected : previousText;
+        }
+
+        private void SetModelStatus(string text, Color color)
+        {
+            if (modelStatusLabel == null) return;
+            modelStatusLabel.Text = text;
+            modelStatusLabel.ForeColor = color;
         }
 
         private void SaveClicked(object sender, EventArgs e)

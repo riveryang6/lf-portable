@@ -1,175 +1,81 @@
-# LF Portable - Codex Desktop
+# LF Portable
 
-LF Portable is a single-file Windows launcher for Codex Desktop. The published
-EXE carries the compact release inputs internally; on first start it creates
-`CodexData` beside itself and keeps packages, runtimes, configuration, SQLite
-state, keys, profile data, and recovery inputs there. A disposable fixed-disk
-session cache is optional and never a startup prerequisite.
+一个把 Codex Desktop 装进**单个 EXE**、可放进 U 盘随身携带的便携版启动器。
 
-## Repository Layout
+LF Portable 不需要在电脑上安装任何东西：双击一个文件，它会在自己旁边展开
+运行环境、完成配置并打开 Codex 桌面界面。你装的、配置的、产生的数据都留在
+EXE 所在的目录里，拔走 U 盘就等于把整个工作环境带走。
 
-- `src/portable-launcher/` contains the x86 bootstrapper, x86/x64/ARM64
-  launcher sources, icons, and the WSL build entry point.
-- `src/release-update/` contains the WSL package entry point and the
-  WSL-to-Windows bridge used for USB deployment and Windows Sandbox.
-- `dist/` is the local build and runnable delivery output. Its root contains
-  only the assembled default x64 `CodexPortable.exe`; the architecture launcher
-  inputs live below `CodexData/tools/launchers/`.
-- `build/CodexPortable.bootstrapper.exe` is the bare x86 assembly input. It is
-  kept outside `dist/` so the runnable root never contains a second EXE.
+> 本项目是一个独立的便携打包工具，与 OpenAI/Codex 官方无隶属关系。
 
-## WSL-First Build And Packaging
+---
 
-Use WSL for source builds, release assembly, Git work, and GitHub upload. The
-supported build requires Bash, Python 3, a .NET SDK, Mono's .NET Framework 4.8
-reference assemblies, and standard GNU/binutils tools. On Debian or Ubuntu,
-installing `mono-devel` and `binutils` supplies the reference assemblies and
-PE inspection tools when they are not already present. Windows-side Scoop or
-Chocolatey packages do not substitute for the WSL Mono reference assemblies;
-keep the build toolchain inside WSL.
+## 快速开始
 
-Build the launcher matrix from WSL:
+1. 到 [GitHub Releases](../../releases) 下载与你的电脑架构对应的单文件：
+   - `LFPortable-x64.exe` —— 64 位 Intel/AMD 电脑；
+   - `LFPortable-arm64.exe` —— ARM64 电脑。
+2. 把它放到任意目录或 U 盘根目录，双击运行。
+3. 首次启动会先在旁边展开运行环境（可能需要几分钟，界面会显示进度），
+   之后弹出配置窗口：
+   - **API 地址（base URL）**：你自己的网关地址；
+   - **API Key**：访问密钥；
+   - **模型**：默认 `gpt-5.6-terra`，可从列表中选择。
+4. 配置完成后自动进入 Codex 桌面。第二次及以后启动会快很多。
 
-```bash
-src/portable-launcher/build-launcher.sh \
-  --output-root ./dist \
-  --bootstrapper-output ./build/CodexPortable.bootstrapper.exe
-```
+### 模型是怎么来的？
 
-Use a prepared, non-USB base root to assemble a release. It supplies the
-portable documentation, notices, compact common runtime ZIP, and the official
-x64 and ARM64 MSIX files. It must not include expanded desktop payloads, user
-profiles, credentials, logs, or a derived plugin cache. When Microsoft Store
-does not expose an offline MSIX directly, `store.rg-adguard.net` may only be
-used to resolve the link; the downloaded file must come from Microsoft's
-delivery domain and pass the launcher's signature, identity, and architecture
-checks.
+- 每次启动会请求你配置的 `API 地址/models`，**网关返回的模型列表就是唯一可用
+  集合**——网关下线某个模型后，它不会再出现在列表里；
+- 上下文窗口、输出上限、图片输入、推理强度等能力参数会参考公开的
+  pi.dev 模型目录自动补齐，让列表可读、可用；
+- 无网络或网关不可达时，会回退到上一次成功拉取的有效列表；如果网关明确
+  返回空列表，则不会继续使用旧的模型清单。
 
-```bash
-src/release-update/release.sh \
-  --base-root /path/to/portable-base \
-  --launcher-root ./dist \
-  --bootstrapper ./build/CodexPortable.bootstrapper.exe \
-  --output-root /path/to/release-parent/release \
-  --version 1.4.24.12
-```
+## 便携与数据
 
-The command creates two direct, architecture-specific executables:
-`LFPortable-x64.exe` and `LFPortable-arm64.exe`. Each EXE carries the common
-runtime and exactly one official MSIX in its internal payload, so no
-`CodexData` directory is present beside a fresh download. Use a new output
-directory for each package attempt.
+| 你想知道的事 | 答案 |
+| --- | --- |
+| 程序和数据放在哪 | 全部在 EXE 同目录的 `CodexData/` 下（配置、密钥、SQLite、资料、日志、运行库、包缓存） |
+| 会不会写系统目录 / 注册表 | 不会。系统里只可能有可丢弃的临时会话缓存，失败会自动回退到便携目录 |
+| 能不能放 U 盘 / exFAT | 可以，公共运行库同时兼容 NTFS 与 exFAT 的展开 |
+| 要不要管理员权限 | 不需要。程序按调用者身份运行，也绝不请求提权 |
+| 和官方 Codex 一起用 | 可以。商店版 Codex Desktop 与本便携版互不干扰、可并行运行 |
 
-The retired Windows-script builder and legacy staging/package-metadata
-workflows are intentionally absent. Bash and Python entry points above perform
-release assembly and publishing. Product security behavior remains in the
-launcher: official signed desktop packages, package identity, architecture,
-and safe archive extraction are still validated at runtime. The release adds no
-custom descriptor, checkpoint, receipt, or whole-tree digest record; the
-official MSIX keeps its platform-required `AppxManifest.xml`.
+## 升级到新版本
 
-## Windows Reproduction And Troubleshooting
+新版本发布后，**只需把新版单文件替换掉原来的 `CodexPortable.exe` 即可**：
 
-Use real Windows GUI and device behavior when reproducing Windows-specific
-launcher problems. These observations are diagnostic aids, not completion,
-approval, or release prerequisites, and they create no checkpoint, evidence
-directory, receipt, or result file. When no volume labelled `CODEX_USB` is
-mounted, ignore the USB scenario; it must not block delivery or publishing.
+- 保留同一个目录下的 `CodexData/`，你的配置、登录态、聊天记录和设置都原样保留；
+- 换的是 EXE 和随包内置的桌面程序/运行库，路径与文件名不变；
+- 架构必须一致（x64 换 x64，arm64 换 arm64）；
+- 如果你的 U 盘根目录本来就有 `CodexPortable.exe`，用新版覆盖即可，无需关心
+  磁盘卷标叫什么。
 
-Run the Sandbox observation from WSL. It uses WSL interop to map the release
-read-only with networking disabled, opens the launcher and Codex Desktop, and
-keeps the desktop visible until it is closed:
+## 常见问题
 
-```bash
-src/release-update/sandbox-smoke.sh \
-  --release-root /path/to/release-parent/release \
-  --architecture x64
-```
+**首次启动很慢 / 一直显示“展开中”？**
+首次需要展开约 2GB 的桌面程序与运行库，慢速 U 盘需要更久。请留意进度或磁盘
+活动而非界面截图；不要在展开结束前拔盘或强杀进程。
 
-The smoke helper keeps its temporary `.wsb` configuration until the Sandbox
-session has ended. Do not manually remove that file while `WindowsSandbox.exe`
-or its service is starting; an early deletion can produce a misleading
-`0x80070002` initialization error.
+**启动时提示网络问题？**
+模型列表需要访问网关；如果网关不可达，会沿用上次成功拉取的列表，旧配置仍可
+继续使用。
 
-When investigating a Sandbox startup problem, observe whether the LF launcher
-and Codex Desktop window open and whether the first-run model announcement or
-`Try model` CTA appears. Use `--architecture arm64` on an ARM64 host.
+**杀毒软件报毒？**
+单文件自解压程序在部分安全软件下会出现误报，属于已知现象。请只在从本项目
+官方 Releases 下载、并核对了文件名与来源后决定是否放行。
 
-Deploy the architecture EXE directly to the real USB drive from WSL. The
-helper uses WSL interop for the Windows volume and process APIs and replaces
-only the root `CodexPortable.exe`; a structured release directory is accepted
-for legacy/migration use. It removes only the old expanded desktop/runtime,
-package-owned offline-marketplace and plugin-cache catalogs discovered from the
-common ZIP and matching MSIX, transaction staging, and retired descriptor paths
-so the next start rebuilds them from the new offline package;
-configuration, SQLite, secrets, sessions, logs, and unknown user files are
-preserved.
+**我想在另一台机器上用？**
+把整个目录（或 U 盘）带过去即可，保持目录结构完整。不要只拷贝 `CodexPortable.exe`
+却丢掉旁边的 `CodexData/`。
 
-```bash
-src/release-update/sync-usb.sh \
-  --source-root /path/to/release/LFPortable-x64.exe \
-  --usb-root "/mnt/<CODEX_USB-drive-letter>" \
-  --execute
-```
+**数据安全**
+`CodexData/data/` 内含你的密钥、SQLite 与资料。备份或分享时请单独处理，不要
+把含真实密钥的目录整体上传到公共位置。
 
-`--usb-root` must be the root of the drive labelled `CODEX_USB`. When
-reproducing a USB-only problem, close task-started LF processes and remove any
-task-created fixed-disk LF state or session cache, then launch only the USB-root
-`CodexPortable.exe` and observe whether its desktop executable runs below that
-same USB root. An independently installed WindowsApps Codex Desktop may remain
-running to reproduce coexistence behavior, and reopening the same portable root
-should not start a second portable instance. Use the EXE matching the USB
-target host architecture. These observations are diagnostic and do not block
-building, delivery, or publishing.
+---
 
-`build/CodexPortable.bootstrapper.exe` is the bare x86 bootstrapper used while
-assembling a release and has no embedded payload. It is not a runnable release,
-and it stays outside `dist/`; never rename or pass it to the USB synchronizer.
-Use the self-extracting `LFPortable-x64.exe` or `LFPortable-arm64.exe` output.
-The build script keeps this input separate so a launcher rebuild cannot
-overwrite a runnable `dist/CodexPortable.exe` or leave a second root EXE.
-The synchronizer and publisher reject a direct executable that lacks the
-embedded release ZIP before they touch the USB or invoke `gh`.
-That rejection is an input correction, not a runnable result: finish assembly
-from the prepared base root and use the resulting architecture EXE for the
-USB or release.
+## 面向开发者 / 维护者
 
-WSL remains the workflow entry point, while its interop bridge invokes the
-Windows process inspection, Windows Sandbox, and desktop interaction needed by
-these two checks.
-
-## Publish
-
-Publish from WSL with the GitHub CLI. A stable release has two program assets:
-`LFPortable-x64.exe` and `LFPortable-arm64.exe`.
-
-Publishing is part of the same task as a verified delivery change. After the
-build and runtime checks pass, continue through version bump, commit, tag,
-push, release upload, and a remote check of the tag, Release, and both assets;
-do not stop at a successful local `dist/` build. Use the current repository and
-the explicitly selected release inputs. A rejected bare bootstrapper is an
-input correction, not a completed release. This workflow does not add custom
-checkpoints, receipts, hashes, or manifest-comparison files.
-
-```bash
-git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.12"
-git tag -a v1.4.24.12 -m "LF Portable 1.4.24.12"
-git push origin HEAD:main refs/tags/v1.4.24.12:refs/tags/v1.4.24.12
-src/release-update/publish-release.sh \
-  --release-root /path/to/release-parent/release \
-  --version 1.4.24.12
-gh release view v1.4.24.12 --json tagName,name,assets
-```
-
-Do not add a complete desktop payload, portable user data, logs, screenshots,
-remote-control records, USB backups, credentials, or machine-specific paths to
-the repository or the release archive.
-
-## Portable Behavior
-
-The launcher initializes a custom API configuration and stores its mutable
-portable state below `CodexData/data`. It starts one portable Codex instance per
-portable root while allowing an independently installed official Codex Desktop
-to run in parallel. More end-user details are included in
-`src/release-update/CodexData-README.txt`.
+源码布局、构建、发布闭环与仓库规则见根目录 [`AGENTS.md`](AGENTS.md)。

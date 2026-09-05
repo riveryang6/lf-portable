@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import threading
 import sys
 import tempfile
 import zipfile
@@ -112,13 +113,20 @@ def source_files(base_root: Path, launcher_root: Path, architecture: str,
     return result
 
 
-def archive_payload(payload_root: Path, archive_path: Path,
+def archive_payload(archive_path: Path,
                     files: list[tuple[str, Path]]) -> None:
+    """Write the payload zip straight from the release sources.
+
+    The previous staging copy re-wrote the multi-gigabyte packages into a
+    temporary payload root before zipping them; zipping from the original
+    sources removes that whole copy pass.
+    """
+
     with zipfile.ZipFile(archive_path, mode="x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
-        for relative_path, _ in files:
+        for relative_path, source in files:
             # Packages are already compressed; storing them avoids a second multi-GB pass.
             compression = zipfile.ZIP_STORED if relative_path.endswith((".zip", ".msix")) else zipfile.ZIP_DEFLATED
-            archive.write(payload_root / relative_path, arcname=relative_path, compress_type=compression)
+            archive.write(source, arcname=relative_path, compress_type=compression)
 
 
 def append_payload(bootstrapper: Path, payload_archive: Path,
@@ -143,15 +151,8 @@ def create_architecture_release(
     with tempfile.TemporaryDirectory(
         dir=str(output_root.parent), prefix=f".{output_root.name}-{architecture}-"
     ) as temporary:
-        temporary_root = Path(temporary)
-        payload_root = temporary_root / "payload"
-        payload_root.mkdir()
-        for relative_path, source in files:
-            destination = payload_root / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
-        payload_archive = temporary_root / "payload.zip"
-        archive_payload(payload_root, payload_archive, files)
+        payload_archive = Path(temporary) / "payload.zip"
+        archive_payload(payload_archive, files)
         append_payload(bootstrapper, payload_archive, output_path)
     return output_path
 
@@ -180,12 +181,37 @@ def create_release(base_root: Path, launcher_root: Path, output_root: Path, vers
     architectures = ARCHITECTURES if requested_architecture == "both" else (requested_architecture,)
     output_root.mkdir(parents=True)
     try:
-        for architecture in architectures:
-            output_path = create_architecture_release(
-                base_root, launcher_root, bootstrapper_path, output_root,
-                architecture, version
-            )
-            print(f"{architecture} executable: {output_path}")
+        # The two architecture executables are independent; build them in
+        # parallel so their multi-gigabyte payload I/O overlaps.
+        results = [None] * len(architectures)
+
+        def run_architecture(index: int, architecture: str) -> None:
+            try:
+                results[index] = create_architecture_release(
+                    base_root, launcher_root, bootstrapper_path, output_root,
+                    architecture, version
+                )
+            except Exception as error:
+                results[index] = error
+
+        if len(architectures) == 1:
+            run_architecture(0, architectures[0])
+        else:
+            workers = [
+                threading.Thread(target=run_architecture, args=(index, architecture))
+                for index, architecture in enumerate(architectures)
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join()
+
+        failures = [result for result in results if isinstance(result, Exception)]
+        if failures:
+            raise failures[0]
+        for result in results:
+            if isinstance(result, Path):
+                print(f"executable: {result}")
     except Exception:
         shutil.rmtree(output_root, ignore_errors=True)
         raise

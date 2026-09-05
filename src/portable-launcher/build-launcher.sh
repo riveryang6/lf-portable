@@ -203,14 +203,42 @@ for reference_name in "${reference_names[@]}"; do
     references+=("$reference")
 done
 
-build_target 'x86 bootstrapper' "$bootstrap_source" x86 \
-    "$bootstrapper_output"
-build_target 'x86 launcher' "$core_source" x86 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.x86.exe"
-build_target 'x64 launcher' "$core_source" x64 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.x64.exe"
-build_target 'ARM64 launcher' "$core_source" arm64 \
-    "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe"
+build_log_dir=$(mktemp -d)
+build_pids=()
+build_logs=()
+
+schedule_build() {
+    local label=$1
+    local log=$2
+    shift 2
+    {
+        build_target "$label" "$@"
+    } >"$log" 2>&1 &
+    build_pids+=("$!")
+    build_logs+=("$log")
+}
+
+schedule_build 'x86 bootstrapper' "$build_log_dir/x86-bootstrapper.log" \
+    "$bootstrap_source" x86 "$bootstrapper_output"
+schedule_build 'x86 launcher' "$build_log_dir/x86-launcher.log" \
+    "$core_source" x86 "$output_root/CodexData/tools/launchers/CodexPortable.x86.exe"
+schedule_build 'x64 launcher' "$build_log_dir/x64-launcher.log" \
+    "$core_source" x64 "$output_root/CodexData/tools/launchers/CodexPortable.x64.exe"
+schedule_build 'ARM64 launcher' "$build_log_dir/arm64-launcher.log" \
+    "$core_source" arm64 "$output_root/CodexData/tools/launchers/CodexPortable.arm64.exe"
+
+build_failed=0
+for ((build_index = 0; build_index < ${#build_pids[@]}; build_index++)); do
+    if ! wait "${build_pids[$build_index]}"; then
+        echo "Build failed: ${build_logs[$build_index]}" >&2
+        tail -n 40 "${build_logs[$build_index]}" >&2 || true
+        build_failed=1
+    fi
+done
+rm -rf -- "$build_log_dir"
+if [[ $build_failed -ne 0 ]]; then
+    exit 1
+fi
 
 printf 'Built launcher outputs under %s\n' "$output_root"
 printf 'Bootstrapper input: %s (outside launcher output; release.py embeds it).\n' \

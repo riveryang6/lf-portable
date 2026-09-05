@@ -8,7 +8,7 @@
 
 1. 不新增 checkpoint、hash marker、收据文件或其他用于扩大流程的状态代码。
 2. 不保留与当前目标无关的兼容性代码、历史分支或迁移残骸；直接实现当前契约。
-3. 构建和运行所需工具必须统一安装并实际使用。不得因为工具缺失而绕过安全检查、降低安全性或引入替代流程；真实 `CODEX_USB` 和 Windows Sandbox 按下文属于可选诊断环境，不是默认必需工具。
+3. 构建和运行所需工具必须统一安装并实际使用。不得因为工具缺失而绕过安全检查、降低安全性或引入替代流程；真实便携 U 盘和 Windows Sandbox 按下文属于可选诊断环境，不是默认必需工具。
 4. 用户指定主仓库路径时，先在该路径执行 `git rev-parse --show-toplevel` 并以返回的仓库根为准；构建和发布只使用该主仓库的源码、`dist/` 与明确指定的当前输入，不得把旧 worktree 或临时产物当作输入。
 5. 以上要求约束新增和修改内容；除非任务明确要求，不删除已有的安全校验、架构选择和数据保护行为。
 
@@ -26,7 +26,7 @@
 
 全局规则优先。本项目不新增、运行、保留或依赖自定义 checkpoint、发布/审批门禁、hash 或 manifest 对比、Sandbox 证据链及其他等价的工作流状态控制。平台要求的签名、身份、架构和安全解压检查属于运行时安全行为，不得以此条为由删除或绕过。
 
-真实 U 盘和 Windows Sandbox 可用于按需复现启动器或便携运行时问题，但这些观察不作为构建、完成、审批或发布的前置条件，也不生成 checkpoint、收据、hash、manifest 对比或持久化证据文件。未挂载卷标为 `CODEX_USB` 的卷时直接忽略 U 盘复现场景，不得因此阻塞交付或发布。
+真实 U 盘和 Windows Sandbox 可用于按需复现启动器或便携运行时问题，但这些观察不作为构建、完成、审批或发布的前置条件，也不生成 checkpoint、收据、hash、manifest 对比或持久化证据文件。U 盘更新/复现的判据是该卷根目录存在正式入口 `CodexPortable.exe`（此前已部署便携根的标志）；卷标为 `CODEX_USB` 只是既有便利信号、不是必需条件，`sync-usb.py` 只接受这两种情况之一并在任何写盘前再次核验源文件角色。未挂载卷根含 `CodexPortable.exe` 的可更新卷时直接忽略 U 盘复现场景，不得因此阻塞交付或发布。
 
 便携桌面在配置的权限模式下必须保持 composer 可发送，且不得因 Windows Sandbox setup/requirement readiness 显示“设置智能体沙盒以继续”并阻断提交。修复不得只隐藏 onboarding/setup 文案；上游载荷改变 readiness 字段或压缩变量名时，启动器应更新等长语义替换或明确报出不兼容，不能静默留下部分修补。排障时可优先覆盖实际发送链路，但只有获得当次用户授权后才能发送无敏感测试文本；该场景不作为完成、审批或发布前置条件。
 
@@ -40,7 +40,7 @@
 
 单文件升级时不得把“版本号相同”或“文件长度相同”当作启动器内容相同；三个随 EXE 内嵌的架构 launcher 每次都应刷新，避免旧 launcher 与新外层 payload 混用。Sandbox smoke 脚本启动 `WindowsSandbox.exe` 后必须保留本次生成的 `.wsb`，直到该 Sandbox 会话退出；客户端进程提前返回、连接断开或超时，只能终止本次脚本创建的客户端并精确清理自己的临时文件，不能立即删除仍可能被 Sandbox 服务读取的配置。
 
-进行真实 U 盘复现时，应先退出本任务启动的 LF Portable 进程，清除本任务在固定盘创建的可丢弃 LF 运行状态和临时缓存，然后只运行 `CODEX_USB` 根目录的 `CodexPortable.exe`。桌面主进程、程序文件和运行库应来自该便携根目录，不得依赖预装、预导入或跨次保留的本机 LF 程序镜像、包缓存或其他本机状态。复现操作仅用于诊断，不改变前述非门禁约束。
+进行真实 U 盘复现时，应先退出本任务启动的 LF Portable 进程，清除本任务在固定盘创建的可丢弃 LF 运行状态和临时缓存，然后只运行该卷根目录的 `CodexPortable.exe`（判据是卷根存在该便携入口，卷标非必需）。桌面主进程、程序文件和运行库应来自该便携根目录，不得依赖预装、预导入或跨次保留的本机 LF 程序镜像、包缓存或其他本机状态。复现操作仅用于诊断，不改变前述非门禁约束。
 
 运行时行为仍应保持产品契约：首次启动不得闪现官方模型升级公告或 `Try model` CTA；启动器应在交接前抑制已知公告并写入相应的首次运行状态。启动器只对同一便携根目录内的 LF Portable 实例执行单实例保护；系统 WindowsApps 中的官方 Codex Desktop 可以并行运行，不能阻止便携启动，也不得被启动器终止。路径检查失败时，应按便携程序的唯一进程名安全拒绝同一便携根目录的重复启动。
 
@@ -75,7 +75,7 @@
 ### 模型目录（自定义 base_url 的 /models 合成）
 
 - 模型集合的唯一权威是每次启动前刷新的 `<base_url>/models`；网关成功返回空数组时必须删除旧 model-catalog.json 并阻止启动（防止已下线模型继续可用）；pi.dev（https://pi.dev/api/models）只做能力补充、不决定模型集合，pi.dev 失败时静默回退，网关模型照常写入。
-- 产出 `CodexData/data/config/model-catalog.json`，并在 config.toml 写入 `model_catalog_json`；默认模型为 gpt-6-astra。
+- 产出 `CodexData/data/config/model-catalog.json`，并在 config.toml 写入 `model_catalog_json`；默认模型为 gpt-5.6-terra。模型选择框在 API URL+Key 就绪后自动从网关读取模型列表供下拉选择默认模型（网关不可达时才允许手输）。
 - 字段优先级：网关显式值 > pi.dev（精确 id / baseUrl / provider / 命名空间）> bundled CLI（`codex debug models --bundled`）同 slug 模板。只有存在 openai/openai-codex 供应商证据才允许套用 OpenAI 专属能力（use_responses_lite、tool_mode、comp_hash、supports_search_tool、node_repl_*）；opencode、azure 或供应商不明的同名模型不得继承。
 - pi.dev 对同一模型在不同供应商导出的 id 可能带前缀（openrouter 用 `google/gemini-…`）也可能裸 id（google 用 `gemini-…`）：选择时应把“精确 id 桶”与“去前缀后缀桶”取并集（SelectPiMetadata + ContainsPiCandidate）再按 URL/provider 匹配，不能只信任精确桶。
 - pi.dev `compat` 标志夹在 pi 顶层与 bundled 模板之间读取（ReadCatalogBoolean）：`supportsReasoningEffort=false` 保留 reasoning 但清空 supported/default_reasoning_level（网关显式 levels 仍最高）；`supports_reasoning_summary_parameter=false` 时 `default_reasoning_summary` 必须写 "none" 而非 "auto"；读取应同时接受 camelCase 与 snake_case（如 thinkingLevelMap/thinking_level_map）。验证 pi.dev 字段前先 curl https://pi.dev/api/models 看实时结构（顶层与 compat 键持续演进），不要按过时示例硬编码。
