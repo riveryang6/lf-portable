@@ -11,6 +11,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using Microsoft.Win32.SafeHandles;
+using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -27,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.11")]
-[assembly: AssemblyFileVersion("1.4.24.11")]
+[assembly: AssemblyVersion("1.4.24.12")]
+[assembly: AssemblyFileVersion("1.4.24.12")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -1176,6 +1177,7 @@ namespace CodexPortable
         internal string GlobalStateBackup;
         internal string BaseUrlFile;
         internal string ModelFile;
+        internal string ModelCatalogFile;
         internal string LanguageFile;
         internal string Downloads;
         internal string ChromiumCache;
@@ -1253,6 +1255,7 @@ namespace CodexPortable
             p.GlobalStateBackup = p.GlobalStateFile + ".bak";
             p.BaseUrlFile = Path.Combine(p.DataRoot, "data", "config", "custom-api-url.txt");
             p.ModelFile = Path.Combine(p.DataRoot, "data", "config", "custom-model.txt");
+            p.ModelCatalogFile = Path.Combine(p.DataRoot, "data", "config", "model-catalog.json");
             p.LanguageFile = Path.Combine(p.DataRoot, "data", "config", "launcher-language.txt");
             p.Downloads = Path.Combine(p.DataRoot, "data", "downloads");
             p.ChromiumCache = Path.Combine(p.Profile, "cache", "chromium");
@@ -1313,6 +1316,7 @@ namespace CodexPortable
         DesktopPayloadReady,
         VerifyingInstalledDesktop,
         VerifyingPluginCache,
+        RefreshingModelCatalog,
         StartingDesktop,
         ConfirmingDesktopStart,
         DesktopStarted
@@ -2038,6 +2042,12 @@ namespace CodexPortable
             changed |= EnsureStringInArray(atoms, SeenModelUpgradeListKey, CurrentModelUpgrade);
             changed |= EnsureStringInArray(atoms, SeenModelUpgradeListKey,
                 OfficialAnnouncedModelUpgrade);
+            string configuredModel = ProviderConfiguration.ReadEffectiveModel(layout);
+            if (ProviderConfiguration.IsValidModel(configuredModel))
+                changed |= EnsureStringInArray(atoms, SeenModelUpgradeListKey, configuredModel);
+            List<string> catalogModels = ProviderConfiguration.ReadCatalogModelIds(layout);
+            for (int i = 0; i < catalogModels.Count; i++)
+                changed |= EnsureStringInArray(atoms, SeenModelUpgradeListKey, catalogModels[i]);
             changed |= SetIfDifferent(atoms, LatestModelSeenKey, null);
 
             Dictionary<string, object> agentModes = GetOrCreateObject(atoms,
@@ -5613,7 +5623,7 @@ namespace CodexPortable
             launchNeedsCommonRuntime = needsCommonRuntime;
             launchNeedsDesktopPackage = needsDesktopPackage;
             launchStepTotal = (needsCommonRuntime ? 4 : 0) +
-                (needsDesktopPackage ? 3 : 0) + 3;
+                (needsDesktopPackage ? 3 : 0) + 4;
             progress.Value = 0;
             progressText.Text = LauncherLocale.T("共 " + launchStepTotal.ToString(
                 CultureInfo.InvariantCulture) + " 步", launchStepTotal.ToString(
@@ -5806,6 +5816,64 @@ namespace CodexPortable
                 {
                     layout.EnsureDirectories();
                     ProviderConfiguration.CleanupLegacyAuthentication(layout);
+                }
+                ReportFirstLaunchPreparationStage(FirstLaunchPreparationStage.RefreshingModelCatalog);
+                try
+                {
+                    int modelCount = await Task.Run(delegate
+                    {
+                        return ProviderConfiguration.RefreshModelCatalog(layout, baseUrl, apiKey, model);
+                    });
+                    if (modelCount == 0)
+                    {
+                        SetBusy(false, null);
+                        MessageBox.Show(LauncherLocale.T(
+                            "自定义 API 当前没有返回任何可用模型，Codex 无法启动。请检查网关模型配置后重试。",
+                            "The custom API currently returns no usable models, so Codex cannot start. Check the gateway model configuration and retry."),
+                            LauncherLocale.T("模型列表为空", "Model list is empty"),
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        FinishStartWorkflow();
+                        return;
+                    }
+                    SafeLog.TryWriteEvent(layout, "model-catalog-refresh", "Loaded " +
+                        modelCount.ToString(CultureInfo.InvariantCulture) +
+                        " model(s) from the configured gateway.");
+                }
+                catch (Exception refreshError)
+                {
+                    // A gateway or pi.dev outage must not make an already
+                    // configured portable installation unusable. The last
+                    // successful catalog remains on disk and is used by Codex.
+                    SafeLog.TryWrite(layout, "model-catalog-refresh", refreshError);
+                    List<string> cachedModels = ProviderConfiguration.ReadCatalogModelIds(layout);
+                    if (cachedModels.Count == 0)
+                    {
+                        SetBusy(false, null);
+                        MessageBox.Show(LauncherLocale.T(
+                            "无法获取自定义 API 的模型列表，首次启动需要模型目录才能继续。请检查网络和 API 配置后重试。",
+                            "Unable to retrieve the custom API model list. The first startup requires a model catalog. Check the network and API configuration, then retry."),
+                            LauncherLocale.T("无法获取模型列表", "Model list unavailable"),
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        FinishStartWorkflow();
+                        return;
+                    }
+                    try
+                    {
+                        ProviderConfiguration.SelectFirstCatalogModelIfMissing(layout, model,
+                            cachedModels);
+                    }
+                    catch (Exception selectionError)
+                    {
+                        SafeLog.TryWrite(layout, "model-catalog-selection", selectionError);
+                        SetBusy(false, null);
+                        MessageBox.Show(LauncherLocale.T(
+                            "无法从上一次模型目录恢复有效模型。请检查便携数据盘后重试。",
+                            "Unable to restore a valid model from the previous catalog. Check the portable data drive and retry."),
+                            LauncherLocale.T("无法恢复模型", "Unable to restore model"),
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        FinishStartWorkflow();
+                        return;
+                    }
                 }
                 // First-run package expansion can create profile content after the
                 // window's background initialization. Reassert the config-backed
@@ -6060,6 +6128,10 @@ namespace CodexPortable
                     status.Text = LauncherLocale.T("校验插件缓存", "Verifying plugin cache");
                     details.Text = LauncherLocale.T("检查并按需恢复必需插件", "Checking and repairing required plugins if needed");
                     break;
+                case FirstLaunchPreparationStage.RefreshingModelCatalog:
+                    status.Text = LauncherLocale.T("刷新模型目录", "Refreshing model catalog");
+                    details.Text = LauncherLocale.T("从网关获取模型并补充 pi.dev 能力参数", "Fetching gateway models and enriching capabilities from pi.dev");
+                    break;
                 case FirstLaunchPreparationStage.StartingDesktop:
                     status.Text = LauncherLocale.T("启动 Codex", "Starting Codex");
                     details.Text = LauncherLocale.T("创建便携运行环境", "Creating the portable runtime environment");
@@ -6109,6 +6181,11 @@ namespace CodexPortable
                 case FirstLaunchPreparationStage.VerifyingPluginCache: return offset + 2;
             }
             offset += 2;
+            switch (stage)
+            {
+                case FirstLaunchPreparationStage.RefreshingModelCatalog: return offset + 1;
+            }
+            offset += 1;
             switch (stage)
             {
                 case FirstLaunchPreparationStage.StartingDesktop:
@@ -6265,7 +6342,8 @@ namespace CodexPortable
             KeySetupResult result = KeySetupDialog.Ask(this,
                 ProviderConfiguration.ReadEffectiveBaseUrl(layout),
                 ProviderConfiguration.ReadEffectiveModel(layout),
-                ProviderConfiguration.ReadStoredApiKey(layout));
+                ProviderConfiguration.ReadStoredApiKey(layout),
+                ProviderConfiguration.ReadCatalogModelIds(layout));
             if (result == null) return;
             try
             {
@@ -6299,6 +6377,7 @@ namespace CodexPortable
                 IOUtil.DeleteFileIfExists(layout.PlainKeyFile);
                 IOUtil.DeleteFileIfExists(layout.BaseUrlFile);
                 IOUtil.DeleteFileIfExists(layout.ModelFile);
+                IOUtil.DeleteFileIfExists(layout.ModelCatalogFile);
                 ProviderConfiguration.CleanupLegacyAuthentication(layout);
                 if (Directory.Exists(layout.CrashDumps)) IOUtil.DeleteDirectoryWithin(layout.CrashDumps, layout.Logs);
                 Directory.CreateDirectory(layout.CrashDumps);
@@ -7904,8 +7983,25 @@ namespace CodexPortable
         internal const string DefaultApprovalPolicy = "never";
         internal const string DefaultSandboxMode = "danger-full-access";
         internal const string DefaultReasoningEffort = "max";
-        internal const string DefaultModel = "gpt-5.6-terra";
+        internal const string DefaultModel = "gpt-6-astra";
         internal const string DefaultFollowUpQueueMode = "steer";
+        private const string PiModelsUrl = "https://pi.dev/api/models";
+        private const int ModelCatalogMaximumBytes = 16 * 1024 * 1024;
+        private const int ModelCatalogTimeoutMilliseconds = 8000;
+        private const int BundledModelTemplateTimeoutMilliseconds = 30000;
+        private const int BundledModelTemplateMaximumBytes = 16 * 1024 * 1024;
+        private const int ModelCatalogMaximumCount = 2000;
+        private sealed class PiModelCandidate
+        {
+            internal string Provider;
+            internal Dictionary<string, object> Metadata;
+        }
+        // Used only when a gateway model has no model-specific instructions
+        // from the gateway, pi.dev, or the bundled CLI catalog.
+        private const string MinimalModelInstructions =
+            "You are Codex, a coding agent. You and the user share one workspace and collaborate to achieve the user's goals.\n\n" +
+            "Be precise, safe, and helpful. Inspect the available context before acting, keep changes focused, and verify the result.";
+        internal static readonly string DefaultModelInstructions = ReadFallbackPrompt();
         internal const string DefaultDeveloperInstructions =
             "Codex Portable 默认规则：\n" +
             "1. 不编写任何 checkpoint 或 hash 相关代码，避免流程扩大或复杂化。\n" +
@@ -7931,6 +8027,26 @@ namespace CodexPortable
         private static readonly string[] NoRequiredPlugins = new string[0];
         private static readonly string[] X64RequiredPlugins = BuildRequiredPlugins(X64BundledPluginNames);
         private static readonly string[] Arm64RequiredPlugins = BuildRequiredPlugins(Arm64BundledPluginNames);
+
+        private static string ReadFallbackPrompt()
+        {
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
+                    "CodexPortable.ModelFallbackPrompt.txt"))
+                {
+                    if (stream == null || stream.Length <= 0 || stream.Length > 512 * 1024)
+                        return MinimalModelInstructions;
+                    using (StreamReader reader = new StreamReader(stream, new UTF8Encoding(false, true),
+                        true, 4096))
+                    {
+                        string value = reader.ReadToEnd().Trim();
+                        return value.Length == 0 ? MinimalModelInstructions : value;
+                    }
+                }
+            }
+            catch { return MinimalModelInstructions; }
+        }
 
         private static string[] BuildRequiredPlugins(string[] bundledPluginNames)
         {
@@ -8085,7 +8201,7 @@ namespace CodexPortable
 
         internal static bool IsValidModel(string value)
         {
-            if (string.IsNullOrEmpty(value) || value.Length > 200) return false;
+            if (string.IsNullOrEmpty(value) || value.Length > 512) return false;
             for (int i = 0; i < value.Length; i++) if (char.IsWhiteSpace(value[i]) || char.IsControl(value[i])) return false;
             return true;
         }
@@ -8095,6 +8211,1477 @@ namespace CodexPortable
             if (string.IsNullOrEmpty(value) || value.Length > 1024) return false;
             for (int i = 0; i < value.Length; i++) if (char.IsWhiteSpace(value[i]) || char.IsControl(value[i])) return false;
             return true;
+        }
+
+        internal static List<string> ReadCatalogModelIds(PortableLayout layout)
+        {
+            List<string> result = new List<string>();
+            try
+            {
+                if (layout == null || !File.Exists(layout.ModelCatalogFile)) return result;
+                FileInfo info = new FileInfo(layout.ModelCatalogFile);
+                if (info.Length <= 0 || info.Length > ModelCatalogMaximumBytes) return result;
+                Dictionary<string, object> root = ParseJsonObject(File.ReadAllText(
+                    layout.ModelCatalogFile, Encoding.UTF8), ModelCatalogMaximumBytes);
+                object modelsValue;
+                object[] models;
+                if (!root.TryGetValue("models", out modelsValue) ||
+                    (models = ToObjectArray(modelsValue)) == null) return result;
+                HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < models.Length; i++)
+                {
+                    Dictionary<string, object> model = ToObjectDictionary(models[i]);
+                    string id = GetString(model, "slug");
+                    if (IsValidModel(id) && seen.Add(id)) result.Add(id);
+                }
+            }
+            catch { result.Clear(); }
+            return result;
+        }
+
+        internal static List<string> FetchGatewayModelIds(string baseUrl, string apiKey)
+        {
+            List<Dictionary<string, object>> models = FetchGatewayModels(baseUrl, apiKey);
+            List<string> result = new List<string>();
+            for (int i = 0; i < models.Count; i++) result.Add(GetModelId(models[i]));
+            return result;
+        }
+
+        private static List<Dictionary<string, object>> FetchGatewayModels(string baseUrl,
+            string apiKey)
+        {
+            string normalized;
+            if (!TryNormalizeBaseUrl(baseUrl, out normalized))
+                throw new InvalidDataException("Invalid custom API base URL.");
+            if (!IsValidApiKey(apiKey)) throw new InvalidDataException("Invalid custom API key.");
+            object root = DownloadJsonValue(BuildModelsUrl(normalized), apiKey,
+                ModelCatalogMaximumBytes);
+            Dictionary<string, object> rootObject = ToObjectDictionary(root);
+            if (rootObject != null) return ReadGatewayModels(rootObject);
+            object[] rootArray = ToJsonArray(root);
+            if (rootArray == null)
+                throw new InvalidDataException("The custom API model response is not an object or array.");
+            return ReadGatewayModels(new Dictionary<string, object> {
+                { "data", rootArray }
+            });
+        }
+
+        internal static int RefreshModelCatalog(PortableLayout layout, string baseUrl,
+            string apiKey, string selectedModel)
+        {
+            if (layout == null) throw new ArgumentNullException("layout");
+            List<Dictionary<string, object>> gatewayModels = FetchGatewayModels(baseUrl, apiKey);
+            List<string> modelIds = new List<string>();
+            for (int i = 0; i < gatewayModels.Count; i++) modelIds.Add(GetModelId(gatewayModels[i]));
+            if (modelIds.Count == 0)
+            {
+                // An empty successful response is authoritative, but the
+                // Codex model manager cannot start with an empty ModelsResponse.
+                // Remove the old catalog so stale models cannot be used as a
+                // fallback after the gateway explicitly reports none.
+                IOUtil.DeleteFileIfExists(layout.ModelCatalogFile);
+                return 0;
+            }
+
+            Dictionary<string, object> piRoot = null;
+            try
+            {
+                piRoot = DownloadJsonObject(PiModelsUrl, null, ModelCatalogMaximumBytes);
+            }
+            catch
+            {
+                // pi.dev is enrichment data. Gateway IDs remain authoritative
+                // when the public metadata service is unavailable.
+            }
+            Dictionary<string, List<PiModelCandidate>> piIndex =
+                BuildPiModelIndex(piRoot);
+            Dictionary<string, Dictionary<string, object>> bundledTemplates =
+                ReadBundledModelTemplates(layout);
+            if (bundledTemplates.Count == 0)
+                bundledTemplates = ReadCachedModelInstructions(layout);
+            // A model without an exact CLI template must not inherit another
+            // model's personality or prompt. Gateway/pi metadata may provide
+            // an explicit template; otherwise use the neutral fallback below.
+            string defaultBaseInstructions = DefaultModelInstructions;
+            List<object> models = new List<object>();
+            for (int i = 0; i < modelIds.Count; i++)
+            {
+                Dictionary<string, object> metadata = SelectPiMetadata(modelIds[i],
+                    baseUrl, gatewayModels[i], piIndex);
+                Dictionary<string, object> bundledTemplate = SelectBundledModelTemplate(
+                    modelIds[i], bundledTemplates);
+                models.Add(CreateCodexModelInfo(modelIds[i], gatewayModels[i], metadata,
+                    bundledTemplate, defaultBaseInstructions, i + 1));
+            }
+            WriteModelCatalog(layout, models.ToArray());
+            SelectFirstCatalogModelIfMissing(layout, selectedModel, modelIds);
+            return modelIds.Count;
+        }
+
+        private static void WriteModelCatalog(PortableLayout layout, object[] models)
+        {
+            Dictionary<string, object> catalog = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            catalog["models"] = models ?? new object[0];
+            JavaScriptSerializer serializer = CreateJsonSerializer(ModelCatalogMaximumBytes);
+            string json = serializer.Serialize(catalog);
+            if (Encoding.UTF8.GetByteCount(json) > ModelCatalogMaximumBytes)
+                throw new InvalidDataException("Generated model catalog is too large.");
+            layout.EnsureDirectories();
+            IOUtil.AtomicWriteText(layout.ModelCatalogFile, json);
+        }
+
+        internal static void SelectFirstCatalogModelIfMissing(PortableLayout layout,
+            string selectedModel, IList<string> modelIds)
+        {
+            if (layout == null || modelIds == null || modelIds.Count == 0) return;
+            for (int i = 0; i < modelIds.Count; i++)
+                if (string.Equals(modelIds[i], selectedModel, StringComparison.Ordinal)) return;
+            IOUtil.AtomicWriteText(layout.ModelFile, modelIds[0] + "\r\n");
+        }
+
+        private static string BuildModelsUrl(string baseUrl)
+        {
+            return baseUrl.TrimEnd('/') + "/models";
+        }
+
+        private static Dictionary<string, Dictionary<string, object>> ReadBundledModelTemplates(
+            PortableLayout layout)
+        {
+            Dictionary<string, Dictionary<string, object>> result =
+                new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+            try
+            {
+                if (layout == null || string.IsNullOrEmpty(layout.CodexExe) ||
+                    !File.Exists(layout.CodexExe)) return result;
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = layout.CodexExe;
+                startInfo.Arguments = "debug models --bundled";
+                startInfo.WorkingDirectory = layout.CurrentApp;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                // codex debug models --bundled always writes UTF-8 JSON; the
+                // default StreamReader encoding follows the console codepage
+                // and would corrupt the payload on CJK systems.
+                startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+                startInfo.RedirectStandardError = false;
+                startInfo.EnvironmentVariables["CODEX_HOME"] = layout.CodexHome;
+                startInfo.EnvironmentVariables["HOME"] = layout.Profile;
+                startInfo.EnvironmentVariables["USERPROFILE"] = layout.Profile;
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null) return result;
+                    Task<string> outputTask = Task.Run(delegate
+                    {
+                        return ReadLimitedText(process.StandardOutput,
+                            BundledModelTemplateMaximumBytes);
+                    });
+                    if (!process.WaitForExit(BundledModelTemplateTimeoutMilliseconds))
+                    {
+                        try { process.Kill(); } catch { }
+                        return result;
+                    }
+                    string output = outputTask.Result;
+                    if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output)) return result;
+                    Dictionary<string, object> root = ParseJsonObject(output,
+                        BundledModelTemplateMaximumBytes);
+                    object modelsValue;
+                    object[] models = root.TryGetValue("models", out modelsValue) ?
+                        ToObjectArray(modelsValue) : null;
+                    if (models == null || models.Length == 0) return result;
+                    for (int i = 0; i < models.Length; i++)
+                    {
+                        Dictionary<string, object> candidate = ToObjectDictionary(models[i]);
+                        if (candidate == null) continue;
+                        string slug = GetString(candidate, "slug");
+                        if (IsValidModel(slug) && !result.ContainsKey(slug))
+                            result[slug] = candidate;
+                    }
+                    return result;
+                }
+            }
+            catch
+            {
+                result.Clear();
+                return result;
+            }
+        }
+
+        private static Dictionary<string, Dictionary<string, object>> ReadCachedModelInstructions(
+            PortableLayout layout)
+        {
+            Dictionary<string, Dictionary<string, object>> result =
+                new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+            try
+            {
+                if (layout == null || !File.Exists(layout.ModelCatalogFile)) return result;
+                FileInfo info = new FileInfo(layout.ModelCatalogFile);
+                if (info.Length <= 0 || info.Length > ModelCatalogMaximumBytes) return result;
+                Dictionary<string, object> root = ParseJsonObject(File.ReadAllText(
+                    layout.ModelCatalogFile, Encoding.UTF8), ModelCatalogMaximumBytes);
+                object[] models = GetArray(root, "models");
+                if (models == null) return result;
+                for (int i = 0; i < models.Length; i++)
+                {
+                    Dictionary<string, object> candidate = ToObjectDictionary(models[i]);
+                    string slug = GetString(candidate, "slug");
+                    if (!IsValidModel(slug) || result.ContainsKey(slug)) continue;
+                    Dictionary<string, object> cachedMessages = GetObject(candidate,
+                        "model_messages");
+                    string instructions = NormalizeCatalogText(
+                        GetString(cachedMessages, "instructions_template") ??
+                        GetString(candidate, "base_instructions"), 512 * 1024);
+                    if (string.IsNullOrEmpty(instructions)) continue;
+                    result[slug] = new Dictionary<string, object>(StringComparer.Ordinal) {
+                        { "slug", slug },
+                        { "base_instructions", instructions },
+                        { "model_messages", new Dictionary<string, object>(StringComparer.Ordinal) {
+                            { "instructions_template", instructions }
+                        }}
+                    };
+                }
+            }
+            catch { result.Clear(); }
+            return result;
+        }
+
+        private static Dictionary<string, object> SelectBundledModelTemplate(string modelId,
+            Dictionary<string, Dictionary<string, object>> templates)
+        {
+            if (templates == null || string.IsNullOrEmpty(modelId)) return null;
+            Dictionary<string, object> result;
+            if (templates.TryGetValue(modelId, out result)) return result;
+            result = FindLongestBundledModelPrefix(modelId, templates);
+            if (result != null) return result;
+            int slash = modelId.IndexOf('/');
+            if (slash >= 0 && slash + 1 < modelId.Length &&
+                modelId.IndexOf('/', slash + 1) < 0)
+                return FindLongestBundledModelPrefix(modelId.Substring(slash + 1), templates);
+            return null;
+        }
+
+        private static Dictionary<string, object> FindLongestBundledModelPrefix(string modelId,
+            Dictionary<string, Dictionary<string, object>> templates)
+        {
+            Dictionary<string, object> result = null;
+            int length = -1;
+            foreach (KeyValuePair<string, Dictionary<string, object>> entry in templates)
+            {
+                if (modelId.StartsWith(entry.Key, StringComparison.Ordinal) &&
+                    entry.Key.Length > length)
+                {
+                    result = entry.Value;
+                    length = entry.Key.Length;
+                }
+            }
+            return result;
+        }
+
+        private static string SelectBundledDefaultBaseInstructions(
+            Dictionary<string, Dictionary<string, object>> templates)
+        {
+            if (templates == null || templates.Count == 0) return null;
+            Dictionary<string, object> preferred;
+            if (templates.TryGetValue(DefaultModel, out preferred))
+            {
+                string instructions = GetString(preferred, "base_instructions");
+                if (!string.IsNullOrEmpty(instructions)) return instructions;
+            }
+
+            string selected = null;
+            long selectedPriority = Int64.MaxValue;
+            foreach (KeyValuePair<string, Dictionary<string, object>> entry in templates)
+            {
+                Dictionary<string, object> candidate = entry.Value;
+                string instructions = GetString(candidate, "base_instructions");
+                if (string.IsNullOrEmpty(instructions) ||
+                    !GetBoolean(candidate, "supported_in_api", true) ||
+                    !string.Equals(GetString(candidate, "visibility"), "list",
+                        StringComparison.Ordinal)) continue;
+                long priority = GetPositiveInteger(candidate, "priority");
+                if (priority <= 0) priority = Int64.MaxValue - 1;
+                if (selected == null || priority < selectedPriority)
+                {
+                    selected = instructions;
+                    selectedPriority = priority;
+                }
+            }
+            if (!string.IsNullOrEmpty(selected)) return selected;
+            foreach (KeyValuePair<string, Dictionary<string, object>> entry in templates)
+            {
+                selected = GetString(entry.Value, "base_instructions");
+                if (!string.IsNullOrEmpty(selected)) return selected;
+            }
+            return null;
+        }
+
+        private static string ReadLimitedText(StreamReader reader, int maximumBytes)
+        {
+            StringBuilder text = new StringBuilder();
+            char[] chunk = new char[8192];
+            int read;
+            while ((read = reader.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                if (text.Length + read > maximumBytes)
+                    throw new InvalidDataException("Bundled model catalog is too large.");
+                text.Append(chunk, 0, read);
+            }
+            return text.ToString();
+        }
+
+        private static Dictionary<string, object> DownloadJsonObject(string url,
+            string apiKey, int maximumBytes)
+        {
+            Dictionary<string, object> result = ToObjectDictionary(
+                DownloadJsonValue(url, apiKey, maximumBytes));
+            if (result == null)
+                throw new InvalidDataException("Model response is not a JSON object.");
+            return result;
+        }
+
+        private static object DownloadJsonValue(string url, string apiKey, int maximumBytes)
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "GET";
+            request.Accept = "application/json";
+            request.Timeout = ModelCatalogTimeoutMilliseconds;
+            request.ReadWriteTimeout = ModelCatalogTimeoutMilliseconds;
+            request.UserAgent = "LFPortable/" + Assembly.GetExecutingAssembly().GetName().Version;
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            // Do not follow an untrusted redirect with the caller's bearer
+            // token. A redirected endpoint can be treated as a failed fetch;
+            // the previous catalog remains available to the caller.
+            request.AllowAutoRedirect = false;
+            if (!string.IsNullOrEmpty(apiKey))
+                request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
+                    throw new WebException("Model endpoint returned HTTP " +
+                        ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture) + ".");
+                if (response.ContentLength > maximumBytes)
+                    throw new InvalidDataException("Model response is too large.");
+                using (Stream stream = response.GetResponseStream())
+                using (MemoryStream buffer = new MemoryStream())
+                {
+                    byte[] chunk = new byte[8192];
+                    int read;
+                    while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
+                    {
+                        if (buffer.Length + read > maximumBytes)
+                            throw new InvalidDataException("Model response is too large.");
+                        buffer.Write(chunk, 0, read);
+                    }
+                    string json = new UTF8Encoding(false, true).GetString(buffer.ToArray());
+                    return ParseJsonValue(json, maximumBytes);
+                }
+            }
+        }
+
+        private static JavaScriptSerializer CreateJsonSerializer(int maximumBytes)
+        {
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            serializer.MaxJsonLength = maximumBytes;
+            serializer.RecursionLimit = 100;
+            return serializer;
+        }
+
+        private static Dictionary<string, object> ParseJsonObject(string json,
+            int maximumBytes)
+        {
+            Dictionary<string, object> result = ToObjectDictionary(
+                ParseJsonValue(json, maximumBytes));
+            if (result == null) throw new InvalidDataException("Model response is not a JSON object.");
+            return result;
+        }
+
+        private static object ParseJsonValue(string json, int maximumBytes)
+        {
+            return CreateJsonSerializer(maximumBytes).DeserializeObject(json);
+        }
+
+        private static List<Dictionary<string, object>> ReadGatewayModels(
+            Dictionary<string, object> root)
+        {
+            if (root == null) throw new InvalidDataException("The custom API model response is empty.");
+            object dataValue;
+            object[] data;
+            if (!root.TryGetValue("data", out dataValue) ||
+                (data = ToJsonArray(dataValue)) == null)
+            {
+                object modelsValue;
+                if (!root.TryGetValue("models", out modelsValue) ||
+                    (data = ToJsonArray(modelsValue)) == null)
+                    throw new InvalidDataException("The custom API model response has no data array.");
+            }
+            if (data.Length > ModelCatalogMaximumCount)
+                throw new InvalidDataException("The custom API returned too many models.");
+            List<Dictionary<string, object>> result =
+                new List<Dictionary<string, object>>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < data.Length; i++)
+            {
+                string id = data[i] as string;
+                Dictionary<string, object> item = ToObjectDictionary(data[i]);
+                if (item != null) id = GetString(item, "id") ?? GetString(item, "slug") ??
+                    GetString(item, "model");
+                if (IsValidModel(id) && seen.Add(id))
+                {
+                    if (item == null)
+                    {
+                        item = new Dictionary<string, object>(StringComparer.Ordinal);
+                        item["id"] = id;
+                    }
+                    result.Add(item);
+                }
+            }
+            return result;
+        }
+
+        private static string GetModelId(Dictionary<string, object> model)
+        {
+            return GetString(model, "id") ?? GetString(model, "slug") ??
+                GetString(model, "model");
+        }
+
+        private static Dictionary<string, List<PiModelCandidate>>
+            BuildPiModelIndex(Dictionary<string, object> root)
+        {
+            Dictionary<string, List<PiModelCandidate>> index =
+                new Dictionary<string, List<PiModelCandidate>>(
+                    StringComparer.OrdinalIgnoreCase);
+            if (root == null) return index;
+            foreach (KeyValuePair<string, object> providerEntry in root)
+            {
+                Dictionary<string, object> provider = providerEntry.Value as
+                    Dictionary<string, object>;
+                if (provider == null) continue;
+                foreach (KeyValuePair<string, object> modelEntry in provider)
+                {
+                    Dictionary<string, object> metadata = ToObjectDictionary(modelEntry.Value);
+                    if (metadata == null) continue;
+                    string id = GetString(metadata, "id") ?? modelEntry.Key;
+                    if (!IsValidModel(id)) continue;
+                    List<PiModelCandidate> candidates;
+                    if (!index.TryGetValue(id, out candidates))
+                    {
+                        candidates = new List<PiModelCandidate>();
+                        index[id] = candidates;
+                    }
+                    candidates.Add(new PiModelCandidate {
+                        Provider = providerEntry.Key,
+                        Metadata = metadata
+                    });
+                }
+            }
+            foreach (KeyValuePair<string, List<PiModelCandidate>> entry in index)
+                entry.Value.Sort(delegate(PiModelCandidate left, PiModelCandidate right)
+                {
+                    return StringComparer.OrdinalIgnoreCase.Compare(left.Provider, right.Provider);
+                });
+            return index;
+        }
+
+        private static Dictionary<string, object> SelectPiMetadata(string modelId,
+            string gatewayBaseUrl, Dictionary<string, object> gateway,
+            Dictionary<string, List<PiModelCandidate>> index)
+        {
+            // pi.dev providers are not consistent about the id they export:
+            // google publishes "gemini-3.1-pro-preview" while openrouter
+            // publishes the same model as "google/gemini-3.1-pro-preview".
+            // Match over the union of the exact-id bucket and the bare-suffix
+            // bucket, then filter by URL/provider evidence.
+            List<PiModelCandidate> candidates = new List<PiModelCandidate>();
+            string namespaceHint = null;
+            List<PiModelCandidate> exact;
+            if (index != null && index.TryGetValue(modelId, out exact) &&
+                exact != null && exact.Count > 0)
+                candidates.AddRange(exact);
+            int slash = modelId.IndexOf('/');
+            if (slash >= 0 && slash + 1 < modelId.Length)
+            {
+                namespaceHint = modelId.Substring(0, slash);
+                List<PiModelCandidate> suffixed;
+                if (index != null &&
+                    index.TryGetValue(modelId.Substring(slash + 1), out suffixed) &&
+                    suffixed != null && suffixed.Count > 0)
+                    foreach (PiModelCandidate candidate in suffixed)
+                        if (!ContainsPiCandidate(candidates, candidate))
+                            candidates.Add(candidate);
+            }
+            if (candidates == null || candidates.Count == 0) return null;
+            string normalizedGateway;
+            TryNormalizeBaseUrl(gatewayBaseUrl, out normalizedGateway);
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                string candidateUrl;
+                if (TryNormalizeBaseUrl(GetString(candidates[i].Metadata, "baseUrl") ??
+                    GetString(candidates[i].Metadata, "base_url"), out candidateUrl) &&
+                    string.Equals(candidateUrl, normalizedGateway,
+                        StringComparison.OrdinalIgnoreCase))
+                    return candidates[i].Metadata;
+            }
+            string[] providerHints = new string[] {
+                GetString(gateway, "provider"), GetString(gateway, "provider_id"),
+                GetString(gateway, "providerId"), GetString(gateway, "owned_by"),
+                namespaceHint
+            };
+            for (int i = 0; i < providerHints.Length; i++)
+            {
+                PiModelCandidate matched = FindPiProviderCandidate(candidates,
+                    providerHints[i]);
+                if (matched != null) return matched.Metadata;
+            }
+            // A slug can exist in several providers. Do not guess from the
+            // model family; without an owner or URL the bundled template is
+            // the only deterministic fallback.
+            return candidates.Count == 1 ? candidates[0].Metadata : null;
+        }
+
+        private static bool ContainsPiCandidate(
+            IList<PiModelCandidate> candidates, PiModelCandidate candidate)
+        {
+            if (candidates == null || candidate == null) return false;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                PiModelCandidate existing = candidates[i];
+                if (!string.Equals(existing.Provider, candidate.Provider,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.Equals(GetModelId(existing.Metadata), GetModelId(candidate.Metadata),
+                        StringComparison.Ordinal)) continue;
+                if (!string.Equals(GetString(existing.Metadata, "baseUrl") ??
+                        GetString(existing.Metadata, "base_url"),
+                        GetString(candidate.Metadata, "baseUrl") ??
+                        GetString(candidate.Metadata, "base_url"),
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                return true;
+            }
+            return false;
+        }
+
+        private static PiModelCandidate FindPiProviderCandidate(
+            IList<PiModelCandidate> candidates, string provider)
+        {
+            if (candidates == null || string.IsNullOrWhiteSpace(provider)) return null;
+            provider = provider.Trim();
+            PiModelCandidate match = null;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                string metadataProvider = GetString(candidates[i].Metadata, "provider");
+                if (!string.Equals(candidates[i].Provider, provider,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(metadataProvider, provider,
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                if (match != null) return null;
+                match = candidates[i];
+            }
+            return match;
+        }
+
+        // OpenAI-backend-only capability fields (use_responses_lite, tool_mode,
+        // comp_hash, search and node repl plumbing) must not be copied onto an
+        // opencode/azure/unknown provider model that happens to share a slug.
+        // Reuse the bundled template for these fields only when the exact
+        // gateway or pi.dev provider carries openai/openai-codex evidence.
+        private static bool ShouldUseBundledCapabilities(Dictionary<string, object> gateway,
+            Dictionary<string, object> pi)
+        {
+            string provider = GetString(pi, "provider") ??
+                GetString(gateway, "provider") ?? GetString(gateway, "provider_id") ??
+                GetString(gateway, "providerId") ?? GetString(gateway, "owned_by");
+            return string.Equals(provider, "openai", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(provider, "openai-codex", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // pi.dev declares protocol compatibility under a nested "compat"
+        // object. Read its flags between the pi.dev top-level fields and the
+        // bundled template so an explicit provider "no" can override a
+        // same-slug OpenAI template, while openai/openai-codex models still
+        // keep template defaults when pi.dev is silent.
+        private static Dictionary<string, object> GetPiCompat(
+            Dictionary<string, object> pi)
+        {
+            if (pi == null) return null;
+            return ToObjectDictionary(GetValue(pi, "compat"));
+        }
+
+        private static bool ReadCatalogBoolean(Dictionary<string, object> gateway,
+            Dictionary<string, object> pi, Dictionary<string, object> bundledTemplate,
+            string[] aliases, bool fallback)
+        {
+            bool value;
+            if (TryGetBooleanAnyByKeys(gateway, out value, aliases)) return value;
+            if (TryGetBooleanAnyByKeys(pi, out value, aliases)) return value;
+            if (TryGetBooleanAnyByKeys(GetPiCompat(pi), out value, aliases)) return value;
+            if (bundledTemplate != null &&
+                TryGetBooleanAnyByKeys(bundledTemplate, out value, aliases)) return value;
+            return fallback;
+        }
+
+        private static bool TryGetThinkingLevelMap(Dictionary<string, object> value,
+            out Dictionary<string, object> map)
+        {
+            map = GetObject(value, "thinkingLevelMap");
+            if (map == null) map = GetObject(value, "thinking_level_map");
+            return map != null;
+        }
+
+        private static Dictionary<string, object> CreateCodexModelInfo(string modelId,
+            Dictionary<string, object> gateway, Dictionary<string, object> pi,
+            Dictionary<string, object> bundledTemplate, string defaultBaseInstructions,
+            int priority)
+        {
+            Dictionary<string, object> result = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            Dictionary<string, object> capabilityTemplate =
+                ShouldUseBundledCapabilities(gateway, pi) ? bundledTemplate : null;
+            Dictionary<string, object> capabilities = MergeModelMetadata(pi, capabilityTemplate);
+            object[] bundledReasoningLevels = GetArray(capabilityTemplate,
+                "supported_reasoning_levels");
+            bool reasoning;
+            if (!TryGetBooleanAnyByKeys(gateway, out reasoning, "reasoning",
+                "supports_reasoning", "supportsReasoning"))
+            {
+                if (!TryGetBooleanAnyByKeys(pi, out reasoning, "reasoning",
+                    "supports_reasoning", "supportsReasoning"))
+                    reasoning = capabilityTemplate != null && bundledReasoningLevels != null &&
+                        bundledReasoningLevels.Length > 0;
+            }
+            bool toolCalls;
+            if (!TryGetBooleanAnyByKeys(gateway, out toolCalls, "tool_call", "tool_calls",
+                "toolCall", "toolCalls", "supports_tools", "supportsTools",
+                "supports_tool_calls", "supportsToolCalls"))
+            {
+                if (!TryGetBooleanAnyByKeys(pi, out toolCalls, "tool_call", "tool_calls",
+                    "toolCall", "toolCalls", "supports_tools", "supportsTools",
+                    "supports_tool_calls", "supportsToolCalls"))
+                    toolCalls = capabilityTemplate == null || !string.Equals(
+                        GetString(capabilityTemplate, "shell_type"), "disabled",
+                        StringComparison.Ordinal);
+            }
+            List<string> efforts = GetReasoningEfforts(gateway, pi, capabilityTemplate,
+                reasoning);
+            result["slug"] = modelId;
+            result["display_name"] = GetStringAny(gateway, capabilities, "display_name", "displayName",
+                "name") ?? GetString(capabilityTemplate, "display_name") ?? modelId;
+            result["description"] = GetStringAny(gateway, capabilities, "description") ??
+                GetString(capabilityTemplate, "description") ??
+                ModelDescription(gateway, capabilities, reasoning, toolCalls);
+            string defaultEffort = NormalizeReasoningEffort(GetStringAny(gateway, capabilities,
+                "default_reasoning_level", "defaultReasoningLevel", "default_reasoning_effort",
+                "defaultReasoningEffort") ?? GetString(capabilityTemplate,
+                    "default_reasoning_level"));
+            if (!reasoning) defaultEffort = null;
+            if (defaultEffort != null && !efforts.Contains(defaultEffort)) defaultEffort = null;
+            if (defaultEffort == null && efforts.Count > 0)
+                defaultEffort = ChooseDefaultReasoningEffort(efforts);
+            result["default_reasoning_level"] = defaultEffort;
+            result["supported_reasoning_levels"] = NormalizeReasoningPresets(
+                GetValueAnyWithFallback(gateway, capabilities,
+                    GetValue(capabilityTemplate, "supported_reasoning_levels"),
+                    "supported_reasoning_levels", "supportedReasoningLevels"), efforts);
+            string shellType = NormalizeEnumAny(gateway, capabilities,
+                new string[] { "unified_exec", "disabled" }, "unified_exec",
+                "shell_type", "shellType");
+            result["shell_type"] = toolCalls ? shellType : "disabled";
+            result["visibility"] = "list";
+            result["supported_in_api"] = true;
+            result["priority"] = priority;
+            object speedTiersValue = GetValueAny(gateway, capabilities, "additional_speed_tiers",
+                "additionalSpeedTiers");
+            if (speedTiersValue == null)
+                speedTiersValue = GetValue(capabilityTemplate, "additional_speed_tiers");
+            result["additional_speed_tiers"] = NormalizeStringArray(speedTiersValue);
+            object serviceTiersValue = GetValueAny(gateway, capabilities, "service_tiers",
+                "serviceTiers");
+            if (serviceTiersValue == null)
+                serviceTiersValue = GetValue(capabilityTemplate, "service_tiers");
+            object[] serviceTiers = NormalizeServiceTiers(serviceTiersValue);
+            result["service_tiers"] = serviceTiers;
+            string defaultServiceTier = GetStringAny(gateway, capabilities,
+                "default_service_tier", "defaultServiceTier") ??
+                GetString(capabilityTemplate, "default_service_tier");
+            result["default_service_tier"] = ContainsServiceTier(serviceTiers,
+                defaultServiceTier) ? defaultServiceTier : null;
+            result["availability_nux"] = null;
+            result["upgrade"] = null;
+            result["include_skills_usage_instructions"] = toolCalls &&
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "include_skills_usage_instructions",
+                        "includeSkillsUsageInstructions" }, false);
+            result["include_plugin_usage_instructions"] = toolCalls &&
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "include_plugin_usage_instructions",
+                        "includePluginUsageInstructions" }, false);
+            result["include_apps_usage_instructions"] = toolCalls &&
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "include_apps_usage_instructions",
+                        "includeAppsUsageInstructions" }, false);
+            bool supportsReasoningSummaryParameter = reasoning &&
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "supports_reasoning_summary_parameter",
+                        "supportsReasoningSummaryParameter" }, true);
+            result["supports_reasoning_summary_parameter"] =
+                supportsReasoningSummaryParameter;
+            result["default_reasoning_summary"] = supportsReasoningSummaryParameter ?
+                NormalizeEnumAny(gateway, capabilities,
+                    new string[] { "none", "auto", "concise", "detailed" }, "auto",
+                    "default_reasoning_summary", "defaultReasoningSummary") :
+                "none";
+            bool supportsVerbosity = ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                new string[] { "support_verbosity", "supportVerbosity" }, false);
+            result["support_verbosity"] = supportsVerbosity;
+            string verbosity = NormalizeEnumAny(gateway, capabilities,
+                new string[] { "low", "medium", "high" }, null,
+                "default_verbosity", "defaultVerbosity");
+            result["default_verbosity"] = supportsVerbosity ? verbosity : null;
+            string applyPatchType = GetStringAny(gateway, pi,
+                "apply_patch_tool_type", "applyPatchToolType");
+            if (applyPatchType == null) applyPatchType = GetString(capabilityTemplate,
+                "apply_patch_tool_type");
+            result["apply_patch_tool_type"] = toolCalls && string.Equals(applyPatchType,
+                "freeform", StringComparison.OrdinalIgnoreCase) ? "freeform" : null;
+            result["web_search_tool_type"] = NormalizeEnumAny(gateway, capabilities,
+                new string[] { "text", "text_and_image" }, "text",
+                "web_search_tool_type", "webSearchToolType");
+            result["truncation_policy"] = NormalizeTruncationPolicy(GetValueAny(gateway, capabilities,
+                "truncation_policy", "truncationPolicy"), capabilityTemplate);
+            result["supports_image_detail_original"] =
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "supports_image_detail_original",
+                        "supportsImageDetailOriginal" }, false);
+            long contextWindow = GetPositiveIntegerAny(gateway, capabilities, "context_window",
+                "contextWindow", "context");
+            if (contextWindow <= 0) contextWindow = GetPositiveInteger(capabilityTemplate,
+                "context_window");
+            if (contextWindow <= 0) contextWindow = 272000;
+            result["context_window"] = contextWindow > 0 ? (object)contextWindow : null;
+            long maxContextWindow = GetPositiveIntegerAny(gateway, capabilities,
+                "max_context_window", "maxContextWindow");
+            if (maxContextWindow <= 0) maxContextWindow = GetPositiveInteger(capabilityTemplate,
+                "max_context_window");
+            if (maxContextWindow < contextWindow) maxContextWindow = contextWindow;
+            result["max_context_window"] = maxContextWindow > 0 ? (object)maxContextWindow : null;
+            long autoCompactTokenLimit = GetPositiveIntegerAny(gateway, capabilities,
+                "auto_compact_token_limit", "autoCompactTokenLimit");
+            if (autoCompactTokenLimit <= 0) autoCompactTokenLimit = GetPositiveInteger(
+                capabilityTemplate, "auto_compact_token_limit");
+            result["auto_compact_token_limit"] = autoCompactTokenLimit > 0 ?
+                (object)autoCompactTokenLimit : null;
+            result["comp_hash"] = NormalizeOptionalCatalogString(GetStringAny(gateway, capabilities,
+                "comp_hash", "compHash") ?? GetString(capabilityTemplate, "comp_hash"), 256);
+            long contextPercent = GetPositiveIntegerAny(gateway, capabilities,
+                "effective_context_window_percent", "effectiveContextWindowPercent");
+            if (contextPercent <= 0) contextPercent = GetPositiveInteger(capabilityTemplate,
+                "effective_context_window_percent");
+            if (contextPercent <= 0 || contextPercent > 100) contextPercent = 95;
+            result["effective_context_window_percent"] = contextPercent;
+            object toolsValue = GetValueAny(gateway, capabilities, "experimental_supported_tools",
+                "experimentalSupportedTools");
+            if (toolsValue == null)
+                toolsValue = GetValue(capabilityTemplate, "experimental_supported_tools");
+            result["experimental_supported_tools"] = toolCalls ?
+                NormalizeStringArray(toolsValue) : new object[0];
+            object inputValue = GetValueAny(gateway, capabilities, "input_modalities", "inputModalities",
+                "input");
+            if (inputValue == null) inputValue = GetValue(capabilityTemplate, "input_modalities");
+            result["input_modalities"] = NormalizeInputModalities(inputValue, false);
+            result["supports_search_tool"] = toolCalls && ReadCatalogBoolean(gateway, pi,
+                capabilityTemplate, new string[] { "supports_search_tool",
+                    "supportsSearchTool", "supportsToolSearch" }, false);
+            result["use_responses_lite"] = ReadCatalogBoolean(gateway, pi,
+                capabilityTemplate, new string[] { "use_responses_lite",
+                    "useResponsesLite" }, false);
+            result["node_repl_auto_review_required"] = toolCalls &&
+                ReadCatalogBoolean(gateway, pi, capabilityTemplate,
+                    new string[] { "node_repl_auto_review_required",
+                        "nodeReplAutoReviewRequired" }, false);
+            result["node_repl_disabled"] = !toolCalls || ReadCatalogBoolean(gateway, pi,
+                capabilityTemplate, new string[] { "node_repl_disabled",
+                    "nodeReplDisabled" }, false);
+            string toolMode = NormalizeEnumAny(gateway, capabilities,
+                new string[] { "direct", "code_mode", "code_mode_only" }, null,
+                "tool_mode", "toolMode");
+            result["tool_mode"] = toolCalls ? toolMode : null;
+            string multiAgent = NormalizeEnumAny(gateway, capabilities,
+                new string[] { "v1", "v2" }, null,
+                "multi_agent_version", "multiAgentVersion");
+            result["multi_agent_version"] = toolCalls ? multiAgent : null;
+            string multiAgentEffort = NormalizeReasoningEffort(GetStringAny(gateway, capabilities,
+                "multi_agent_reasoning_effort", "multiAgentReasoningEffort") ??
+                GetString(capabilityTemplate, "multi_agent_reasoning_effort"));
+            result["multi_agent_reasoning_effort"] = toolCalls && efforts.Contains(multiAgentEffort) ?
+                multiAgentEffort : null;
+            string autoReviewModel = GetStringAny(gateway, capabilities,
+                "auto_review_model_override", "autoReviewModelOverride") ??
+                GetString(capabilityTemplate, "auto_review_model_override");
+            result["auto_review_model_override"] = IsValidModel(autoReviewModel) ?
+                autoReviewModel : null;
+            result["model_specialty"] = NormalizeOptionalCatalogString(GetStringAny(gateway, capabilities,
+                "model_specialty", "modelSpecialty") ??
+                GetString(capabilityTemplate, "model_specialty"), 128);
+            Dictionary<string, object> messages = CloneObjectDictionary(
+                GetObject(bundledTemplate, "model_messages"));
+            string explicitInstructions = NormalizeCatalogText(
+                GetStringAny(gateway, pi, "base_instructions", "baseInstructions"),
+                512 * 1024);
+            string instructions = messages == null ? null : GetString(messages,
+                "instructions_template");
+            if (explicitInstructions != null) instructions = explicitInstructions;
+            if (string.IsNullOrEmpty(instructions))
+                instructions = NormalizeCatalogText(
+                    GetString(bundledTemplate, "base_instructions"), 512 * 1024);
+            if (string.IsNullOrEmpty(instructions)) instructions = defaultBaseInstructions;
+            if (string.IsNullOrEmpty(instructions)) instructions = DefaultDeveloperInstructions;
+            if (messages == null) messages = new Dictionary<string, object>(StringComparer.Ordinal);
+            messages["instructions_template"] = instructions;
+            result["model_messages"] = messages;
+            // Keep the legacy field as well: older Codex clients promote it
+            // when a canonical template is unavailable.
+            result["base_instructions"] = instructions;
+            return result;
+        }
+
+        private static string ModelDescription(Dictionary<string, object> gateway,
+            Dictionary<string, object> capabilities, bool reasoning, bool toolCalls)
+        {
+            List<string> parts = new List<string>();
+            long context = GetPositiveIntegerAny(gateway, capabilities, "contextWindow",
+                "context_window", "context");
+            long output = GetPositiveIntegerAny(gateway, capabilities, "maxTokens",
+                "max_tokens", "output_limit");
+            if (context > 0) parts.Add(context.ToString("N0", CultureInfo.InvariantCulture) +
+                " token context");
+            if (output > 0) parts.Add(output.ToString("N0", CultureInfo.InvariantCulture) +
+                " max output");
+            parts.Add(reasoning ? "reasoning" : "non-reasoning");
+            parts.Add(toolCalls ? "tool calling" : "no tool calling");
+            if (SupportsImage(gateway) || SupportsImage(capabilities))
+                parts.Add("image input");
+            return string.Join("; ", parts.ToArray()) + ".";
+        }
+
+        private static object NormalizeAvailabilityNux(object raw)
+        {
+            Dictionary<string, object> value = ToObjectDictionary(raw);
+            string message = NormalizeOptionalCatalogString(GetString(value, "message"), 4096);
+            return string.IsNullOrEmpty(message) ? null :
+                new Dictionary<string, object> { { "message", message } };
+        }
+
+        private static object NormalizeModelUpgrade(object raw)
+        {
+            Dictionary<string, object> value = ToObjectDictionary(raw);
+            string model = NormalizeOptionalCatalogString(GetString(value, "model"), 512);
+            string markdown = NormalizeCatalogText(
+                GetString(value, "migration_markdown") ??
+                GetString(value, "migrationMarkdown"), 16384);
+            if (string.IsNullOrEmpty(model) || !IsValidModel(model) || markdown == null) return null;
+            Dictionary<string, object> result = new Dictionary<string, object> {
+                { "model", model }, { "migration_markdown", markdown }
+            };
+            string retirementAt = NormalizeOptionalCatalogString(
+                GetString(value, "retirement_at") ?? GetString(value, "retirementAt"), 128);
+            DateTime parsed;
+            if (!string.IsNullOrEmpty(retirementAt) &&
+                DateTime.TryParse(retirementAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out parsed))
+                result["retirement_at"] = parsed.ToUniversalTime().ToString("o",
+                    CultureInfo.InvariantCulture);
+            return result;
+        }
+
+        private static List<string> GetReasoningEfforts(Dictionary<string, object> gateway,
+            Dictionary<string, object> pi, Dictionary<string, object> bundledTemplate,
+            bool reasoning)
+        {
+            List<string> result = new List<string>();
+            if (!reasoning) return result;
+            string[] effortKeys = new string[] { "supported_reasoning_levels",
+                "supportedReasoningLevels", "reasoning_efforts", "reasoningEfforts" };
+            Dictionary<string, object> gatewayMap = null;
+            bool gatewaySpecified = HasAnyKey(gateway, effortKeys) ||
+                TryGetThinkingLevelMap(gateway, out gatewayMap);
+            AddReasoningEfforts(result, GetValueAny(gateway, null, effortKeys));
+            if (gatewayMap != null) AddReasoningMapEfforts(result, gatewayMap);
+            if (gatewaySpecified) return result;
+            // A provider that rejects an explicit reasoning-effort dial keeps
+            // the reasoning marker but exposes no selectable levels. Its
+            // thinkingLevelMap must not silently re-introduce strengths the
+            // wire protocol cannot represent.
+            bool supportsEffort = true;
+            bool hasSupportsEffort;
+            Dictionary<string, object> compat = GetPiCompat(pi);
+            if (TryGetBooleanAnyByKeys(compat, out hasSupportsEffort,
+                "supportsReasoningEffort", "supports_reasoning_effort"))
+                supportsEffort = hasSupportsEffort;
+            if (!supportsEffort) return result;
+            Dictionary<string, object> piMap = null;
+            bool piSpecified = HasAnyKey(pi, effortKeys) ||
+                TryGetThinkingLevelMap(pi, out piMap);
+            AddReasoningEfforts(result, GetValueAny(null, pi, effortKeys));
+            if (piMap != null) AddReasoningMapEfforts(result, piMap);
+            if (piSpecified) return result;
+            if (bundledTemplate != null)
+            {
+                AddReasoningEfforts(result, GetValue(bundledTemplate,
+                    "supported_reasoning_levels"));
+                return result;
+            }
+            result.Add("low");
+            result.Add("medium");
+            result.Add("high");
+            return result;
+        }
+
+        private static void AddReasoningEfforts(List<string> result, object raw)
+        {
+            object[] values = ToObjectArray(raw);
+            if (values == null) return;
+            for (int i = 0; i < values.Length; i++)
+            {
+                Dictionary<string, object> entry = ToObjectDictionary(values[i]);
+                string effort = entry == null ? values[i] as string :
+                    GetString(entry, "effort") ?? GetString(entry, "level") ??
+                    GetString(entry, "reasoning_effort");
+                effort = NormalizeReasoningEffort(effort);
+                if (!string.IsNullOrEmpty(effort) && !result.Contains(effort)) result.Add(effort);
+            }
+        }
+
+        private static void AddReasoningMapEfforts(List<string> result,
+            Dictionary<string, object> map)
+        {
+            if (map == null) return;
+            string[] order = new string[] { "none", "minimal", "low", "medium", "high",
+                "xhigh", "max", "ultra", "persistent" };
+            for (int i = 0; i < order.Length; i++)
+            {
+                object value;
+                string key = order[i] == "none" ? "off" : order[i];
+                if (map.TryGetValue(key, out value) && value != null &&
+                    !result.Contains(order[i])) result.Add(order[i]);
+            }
+            foreach (KeyValuePair<string, object> entry in map)
+            {
+                if (entry.Value == null) continue;
+                string effort = NormalizeReasoningEffort(entry.Key);
+                if (!string.IsNullOrEmpty(effort) && !result.Contains(effort))
+                    result.Add(effort);
+            }
+        }
+
+        private static string NormalizeReasoningEffort(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            string normalized = value.Trim();
+            if (normalized.Length == 0 || normalized.Length > 128) return null;
+            for (int i = 0; i < normalized.Length; i++)
+                if (char.IsControl(normalized[i])) return null;
+            string knownValue = normalized.ToLowerInvariant();
+            if (knownValue == "off") return null;
+            string[] allowed = new string[] { "none", "minimal", "low", "medium", "high",
+                "xhigh", "max", "ultra", "persistent" };
+            for (int i = 0; i < allowed.Length; i++)
+                if (knownValue == allowed[i]) return knownValue;
+            return normalized;
+        }
+
+        private static object[] NormalizeReasoningPresets(object raw, List<string> efforts)
+        {
+            object[] values = ToObjectArray(raw);
+            List<object> result = new List<object>();
+            if (values != null)
+            {
+                for (int i = 0; i < values.Length; i++)
+                {
+                    Dictionary<string, object> entry = ToObjectDictionary(values[i]);
+                    string effort = entry == null ? values[i] as string :
+                        GetString(entry, "effort") ?? GetString(entry, "level") ??
+                        GetString(entry, "reasoning_effort");
+                    effort = NormalizeReasoningEffort(effort);
+                    if (string.IsNullOrEmpty(effort) || !efforts.Contains(effort)) continue;
+                    string description = entry == null ? null : GetString(entry, "description");
+                    bool duplicate = false;
+                    for (int j = 0; j < result.Count; j++)
+                    {
+                        Dictionary<string, object> existing = result[j] as Dictionary<string, object>;
+                        if (existing != null && string.Equals(GetString(existing, "effort"), effort,
+                            StringComparison.Ordinal))
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (duplicate) continue;
+                    result.Add(new Dictionary<string, object> {
+                        { "effort", effort },
+                        { "description", string.IsNullOrEmpty(description) ?
+                            ReasoningDescription(effort) : description }
+                    });
+                }
+            }
+            for (int i = 0; i < efforts.Count; i++)
+            {
+                bool found = false;
+                for (int j = 0; j < result.Count; j++)
+                {
+                    Dictionary<string, object> existing = result[j] as Dictionary<string, object>;
+                    if (existing != null && string.Equals(GetString(existing, "effort"),
+                        efforts[i], StringComparison.Ordinal))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    result.Add(new Dictionary<string, object> {
+                        { "effort", efforts[i] },
+                        { "description", ReasoningDescription(efforts[i]) }
+                    });
+            }
+            return result.ToArray();
+        }
+
+        private static object[] BuildReasoningPresets(List<string> efforts)
+        {
+            List<object> presets = new List<object>();
+            for (int i = 0; i < efforts.Count; i++)
+            {
+                Dictionary<string, object> preset = new Dictionary<string, object>();
+                preset["effort"] = efforts[i];
+                preset["description"] = ReasoningDescription(efforts[i]);
+                presets.Add(preset);
+            }
+            return presets.ToArray();
+        }
+
+        private static string ChooseDefaultReasoningEffort(List<string> efforts)
+        {
+            string[] preference = new string[] { "medium", "high", "low", "minimal", "none",
+                "xhigh", "max", "ultra" };
+            for (int i = 0; i < preference.Length; i++)
+                if (efforts.Contains(preference[i])) return preference[i];
+            return efforts[0];
+        }
+
+        private static string ReasoningDescription(string effort)
+        {
+            switch (effort)
+            {
+                case "none": return "No reasoning";
+                case "minimal": return "Minimal reasoning";
+                case "low": return "Fast responses with lighter reasoning";
+                case "medium": return "Balanced speed and reasoning depth";
+                case "high": return "Greater reasoning depth";
+                case "xhigh": return "Extra high reasoning depth";
+                case "max": return "Maximum reasoning depth";
+                case "ultra": return "Maximum reasoning with task delegation";
+                default: return effort;
+            }
+        }
+
+        private static object[] GetInputModalities(Dictionary<string, object> pi)
+        {
+            return NormalizeInputModalities(GetValue(pi, "input"), false);
+        }
+
+        private static bool SupportsImage(Dictionary<string, object> pi)
+        {
+            object[] input = GetArray(pi, "input");
+            if (input == null) input = GetArray(pi, "input_modalities");
+            if (input == null) input = GetArray(pi, "inputModalities");
+            if (input == null) return false;
+            for (int i = 0; i < input.Length; i++)
+                if (string.Equals(input[i] as string, "image", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        private static object GetValue(Dictionary<string, object> value, string key)
+        {
+            if (value == null || string.IsNullOrEmpty(key)) return null;
+            object item;
+            return value.TryGetValue(key, out item) ? item : null;
+        }
+
+        // An exact pi.dev match describes the selected gateway/provider. Keep
+        // it ahead of the bundled same-slug template, then use that template
+        // only for fields the provider metadata does not advertise. Gateway
+        // fields are read separately as the explicit override layer.
+        private static Dictionary<string, object> MergeModelMetadata(
+            Dictionary<string, object> pi, Dictionary<string, object> bundledTemplate)
+        {
+            Dictionary<string, object> result = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            if (pi != null)
+                foreach (KeyValuePair<string, object> entry in pi)
+                    if (entry.Value != null) result[entry.Key] = entry.Value;
+            if (bundledTemplate != null)
+                foreach (KeyValuePair<string, object> entry in bundledTemplate)
+                    if (!result.ContainsKey(entry.Key) || result[entry.Key] == null)
+                        if (entry.Value != null) result[entry.Key] = entry.Value;
+            return result;
+        }
+
+        private static Dictionary<string, object> CloneObjectDictionary(
+            Dictionary<string, object> value)
+        {
+            if (value == null) return null;
+            Dictionary<string, object> result = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            foreach (KeyValuePair<string, object> entry in value)
+                result[entry.Key] = entry.Value;
+            return result;
+        }
+
+        private static bool HasAnyKey(Dictionary<string, object> value, params string[] keys)
+        {
+            if (value == null || keys == null) return false;
+            for (int i = 0; i < keys.Length; i++)
+                if (value.ContainsKey(keys[i])) return true;
+            return false;
+        }
+
+        private static string GetString(Dictionary<string, object> value, string key)
+        {
+            object item = GetValue(value, key);
+            return item as string;
+        }
+
+        private static Dictionary<string, object> GetObject(
+            Dictionary<string, object> value, string key)
+        {
+            return ToObjectDictionary(GetValue(value, key));
+        }
+
+        private static object[] GetArray(Dictionary<string, object> value, string key)
+        {
+            return ToObjectArray(GetValue(value, key));
+        }
+
+        private static bool GetBoolean(Dictionary<string, object> value, string key,
+            bool fallback)
+        {
+            object item = GetValue(value, key);
+            return item is bool ? (bool)item : fallback;
+        }
+
+        private static long GetPositiveInteger(Dictionary<string, object> value, string key)
+        {
+            object item = GetValue(value, key);
+            if (item == null) return 0;
+            try
+            {
+                decimal number = Convert.ToDecimal(item, CultureInfo.InvariantCulture);
+                if (number <= 0 || number != Decimal.Truncate(number) ||
+                    number > Int64.MaxValue) return 0;
+                return (long)number;
+            }
+            catch { return 0; }
+        }
+
+        private static object GetValueAny(Dictionary<string, object> primary,
+            Dictionary<string, object> secondary, params string[] keys)
+        {
+            if (keys == null) return null;
+            for (int i = 0; i < keys.Length; i++)
+            {
+                object item = GetValue(primary, keys[i]);
+                if (item != null) return item;
+            }
+            for (int i = 0; i < keys.Length; i++)
+            {
+                object item = GetValue(secondary, keys[i]);
+                if (item != null) return item;
+            }
+            return null;
+        }
+
+        private static object GetValueAnyWithFallback(Dictionary<string, object> primary,
+            Dictionary<string, object> secondary, object fallback, params string[] keys)
+        {
+            object value = GetValueAny(primary, secondary, keys);
+            return value ?? fallback;
+        }
+
+        private static string GetStringAny(Dictionary<string, object> primary,
+            Dictionary<string, object> secondary, params string[] keys)
+        {
+            if (keys == null) return null;
+            for (int i = 0; i < keys.Length; i++)
+            {
+                string item = GetString(primary, keys[i]);
+                if (item != null) return item;
+            }
+            for (int i = 0; i < keys.Length; i++)
+            {
+                string item = GetString(secondary, keys[i]);
+                if (item != null) return item;
+            }
+            return null;
+        }
+
+        private static bool TryGetBooleanAnyByKeys(Dictionary<string, object> value,
+            out bool result, params string[] keys)
+        {
+            result = false;
+            if (value == null || keys == null) return false;
+            for (int i = 0; i < keys.Length; i++)
+            {
+                object item = GetValue(value, keys[i]);
+                if (item is bool)
+                {
+                    result = (bool)item;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static long GetPositiveIntegerAny(Dictionary<string, object> primary,
+            Dictionary<string, object> secondary, params string[] keys)
+        {
+            if (keys != null)
+            {
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    long value = GetPositiveInteger(primary, keys[i]);
+                    if (value > 0) return value;
+                }
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    long value = GetPositiveInteger(secondary, keys[i]);
+                    if (value > 0) return value;
+                }
+            }
+            return 0;
+        }
+
+        private static Dictionary<string, object> GetObjectAny(
+            Dictionary<string, object> primary, Dictionary<string, object> secondary,
+            params string[] keys)
+        {
+            if (keys == null) return null;
+            for (int i = 0; i < keys.Length; i++)
+            {
+                Dictionary<string, object> item = GetObject(primary, keys[i]);
+                if (item != null) return item;
+            }
+            for (int i = 0; i < keys.Length; i++)
+            {
+                Dictionary<string, object> item = GetObject(secondary, keys[i]);
+                if (item != null) return item;
+            }
+            return null;
+        }
+
+        private static string NormalizeOptionalCatalogString(string value, int maximumLength)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            value = value.Trim();
+            if (value.Length == 0 || value.Length > maximumLength) return null;
+            for (int i = 0; i < value.Length; i++)
+                if (char.IsControl(value[i])) return null;
+            return value;
+        }
+
+        private static string NormalizeCatalogText(string value, int maximumLength)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            value = value.Trim();
+            if (value.Length == 0 || value.Length > maximumLength) return null;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '\r' || c == '\n' || c == '\t') continue;
+                if (char.IsControl(c)) return null;
+            }
+            return value;
+        }
+
+        private static Dictionary<string, object> ToObjectDictionary(object value)
+        {
+            Dictionary<string, object> direct = value as Dictionary<string, object>;
+            if (direct != null) return direct;
+            IDictionary<string, object> generic = value as IDictionary<string, object>;
+            if (generic != null)
+            {
+                Dictionary<string, object> copy = new Dictionary<string, object>(
+                    StringComparer.Ordinal);
+                foreach (KeyValuePair<string, object> entry in generic)
+                    copy[entry.Key] = entry.Value;
+                return copy;
+            }
+            IDictionary dictionary = value as IDictionary;
+            if (dictionary == null) return null;
+            Dictionary<string, object> result = new Dictionary<string, object>(
+                StringComparer.Ordinal);
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                string key = entry.Key as string;
+                if (key != null) result[key] = entry.Value;
+            }
+            return result.Count == 0 ? null : result;
+        }
+
+        private static object[] ToObjectArray(object value)
+        {
+            if (value == null) return null;
+            object[] direct = value as object[];
+            if (direct != null) return direct;
+            if (value is string) return new object[] { value };
+            IList list = value as IList;
+            if (list != null)
+            {
+                object[] result = new object[list.Count];
+                for (int i = 0; i < list.Count; i++) result[i] = list[i];
+                return result;
+            }
+            IEnumerable enumerable = value as IEnumerable;
+            if (enumerable == null) return null;
+            ArrayList values = new ArrayList();
+            foreach (object item in enumerable) values.Add(item);
+            return values.ToArray();
+        }
+
+        private static object[] ToJsonArray(object value)
+        {
+            if (value == null || value is string || value is IDictionary) return null;
+            return ToObjectArray(value);
+        }
+
+        private static object[] NormalizeStringArray(object raw)
+        {
+            List<object> result = new List<object>();
+            object[] values = ToObjectArray(raw);
+            if (values == null) return result.ToArray();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < values.Length; i++)
+            {
+                string value = values[i] as string;
+                if (value == null) continue;
+                value = value.Trim();
+                if (value.Length == 0 || value.Length > 256 ||
+                    value.IndexOfAny(new char[] { '\r', '\n', '\0' }) >= 0 ||
+                    !seen.Add(value)) continue;
+                result.Add(value);
+            }
+            return result.ToArray();
+        }
+
+        private static object[] NormalizeServiceTiers(object raw)
+        {
+            List<object> result = new List<object>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            object[] values = ToObjectArray(raw);
+            if (values == null) return result.ToArray();
+            for (int i = 0; i < values.Length; i++)
+            {
+                Dictionary<string, object> entry = ToObjectDictionary(values[i]);
+                string id = entry == null ? values[i] as string :
+                    GetString(entry, "id") ?? GetString(entry, "slug") ??
+                    GetString(entry, "value");
+                if (id == null) continue;
+                id = id.Trim();
+                if (id.Length == 0 || id.Length > 128 || !seen.Add(id)) continue;
+                string name = entry == null ? id : GetString(entry, "name");
+                string description = entry == null ? null : GetString(entry, "description");
+                result.Add(new Dictionary<string, object> {
+                    { "id", id },
+                    { "name", string.IsNullOrEmpty(name) ? id : name },
+                    { "description", description ?? "" }
+                });
+            }
+            return result.ToArray();
+        }
+
+        private static bool ContainsServiceTier(object[] serviceTiers, string id)
+        {
+            if (serviceTiers == null || string.IsNullOrEmpty(id)) return false;
+            for (int i = 0; i < serviceTiers.Length; i++)
+            {
+                Dictionary<string, object> tier = serviceTiers[i] as Dictionary<string, object>;
+                if (tier != null && string.Equals(GetString(tier, "id"), id,
+                    StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        private static object[] NormalizeInputModalities(object raw, bool addImageFallback)
+        {
+            List<object> result = new List<object>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            result.Add("text");
+            seen.Add("text");
+            object[] values = ToObjectArray(raw);
+            if (values != null)
+            {
+                for (int i = 0; i < values.Length; i++)
+                {
+                    string value = values[i] as string;
+                    if (value == null) continue;
+                    value = value.Trim().ToLowerInvariant();
+                    if ((value == "image" || value == "audio") && seen.Add(value))
+                        result.Add(value);
+                }
+            }
+            if (addImageFallback && seen.Add("image")) result.Add("image");
+            return result.ToArray();
+        }
+
+        private static string NormalizeEnum(string value, string[] allowed,
+            string fallback)
+        {
+            if (allowed != null && value != null)
+            {
+                string normalized = value.Trim().ToLowerInvariant();
+                for (int i = 0; i < allowed.Length; i++)
+                    if (string.Equals(normalized, allowed[i], StringComparison.OrdinalIgnoreCase))
+                        return allowed[i];
+            }
+            return fallback;
+        }
+
+        private static string NormalizeEnumAny(Dictionary<string, object> primary,
+            Dictionary<string, object> secondary, string[] allowed, string fallback,
+            params string[] keys)
+        {
+            Dictionary<string, object>[] sources = new Dictionary<string, object>[] {
+                primary, secondary
+            };
+            for (int source = 0; source < sources.Length; source++)
+            {
+                for (int i = 0; keys != null && i < keys.Length; i++)
+                {
+                    string value = GetString(sources[source], keys[i]);
+                    string normalized = NormalizeEnum(value, allowed, null);
+                    if (normalized != null) return normalized;
+                }
+            }
+            return fallback;
+        }
+
+        private static object NormalizeTruncationPolicy(object raw,
+            Dictionary<string, object> bundledTemplate)
+        {
+            object[] candidates = new object[] { raw,
+                GetValue(bundledTemplate, "truncation_policy") };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                Dictionary<string, object> entry = ToObjectDictionary(candidates[i]);
+                string mode = NormalizeEnum(GetString(entry, "mode"),
+                    new string[] { "bytes", "tokens" }, null);
+                long limit = GetPositiveInteger(entry, "limit");
+                if (mode != null && limit > 0)
+                    return new Dictionary<string, object> {
+                        { "mode", mode }, { "limit", limit }
+                    };
+            }
+            return new Dictionary<string, object> {
+                { "mode", "bytes" }, { "limit", 10000 }
+            };
         }
 
         // These two settings are Codex's permission contract.  The launcher
@@ -8233,7 +9820,14 @@ namespace CodexPortable
             if (!TryNormalizeBaseUrl(baseUrl, out normalized)) throw new InvalidDataException("Invalid custom API base URL.");
             if (!IsValidModel(model)) throw new InvalidDataException("Invalid custom API model.");
             if (!IsValidApiKey(apiKey)) throw new InvalidDataException("Invalid custom API key.");
+            string previousBaseUrl = ReadEffectiveBaseUrl(layout);
+            string previousApiKey = ReadStoredApiKey(layout);
+            bool catalogOwnerChanged = !string.Equals(previousBaseUrl, normalized,
+                StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(previousApiKey, apiKey, StringComparison.Ordinal);
             layout.EnsureDirectories();
+            if (catalogOwnerChanged)
+                IOUtil.DeleteFileIfExists(layout.ModelCatalogFile);
             IOUtil.AtomicWriteText(layout.BaseUrlFile, normalized + "\r\n");
             IOUtil.AtomicWriteText(layout.ModelFile, model + "\r\n");
             IOUtil.AtomicWriteSensitiveText(layout.PlainKeyFile, apiKey + "\r\n");
@@ -8306,6 +9900,7 @@ namespace CodexPortable
             Directory.CreateDirectory(layout.CodexHome);
             string baseUrl = ReadEffectiveBaseUrl(layout) ?? UnconfiguredBaseUrl;
             string model = ReadEffectiveModel(layout);
+            string reasoningEffort = ReadEffectiveReasoningEffort(layout, model);
             string approvalPolicy = DefaultApprovalPolicy;
             string sandboxMode = DefaultSandboxMode;
             string followUpQueueMode = DefaultFollowUpQueueMode;
@@ -8336,7 +9931,10 @@ namespace CodexPortable
             text.AppendLine("model = " + QuoteToml(model));
             text.AppendLine("model_provider = " + QuoteToml(ProviderId));
             text.AppendLine(DeveloperInstructionsConfigLine);
-            text.AppendLine(ReasoningEffortConfigLine);
+            if (!string.IsNullOrEmpty(reasoningEffort))
+                text.AppendLine("model_reasoning_effort = " + QuoteToml(reasoningEffort));
+            if (File.Exists(layout.ModelCatalogFile))
+                text.AppendLine("model_catalog_json = " + QuoteToml(layout.ModelCatalogFile));
             text.AppendLine("chatgpt_base_url = \"http://127.0.0.1:9\"");
             text.AppendLine("approval_policy = " + QuoteToml(approvalPolicy));
             text.AppendLine("sandbox_mode = " + QuoteToml(sandboxMode));
@@ -8381,6 +9979,44 @@ namespace CodexPortable
                 text.AppendLine("enabled = true");
             }
             WriteConfigIfChanged(layout.ConfigFile, text.ToString());
+        }
+
+        private static string ReadEffectiveReasoningEffort(PortableLayout layout, string model)
+        {
+            string fallback = DefaultReasoningEffort;
+            try
+            {
+                if (layout == null || !File.Exists(layout.ModelCatalogFile)) return fallback;
+                FileInfo info = new FileInfo(layout.ModelCatalogFile);
+                if (info.Length <= 0 || info.Length > ModelCatalogMaximumBytes) return fallback;
+                Dictionary<string, object> root = ParseJsonObject(File.ReadAllText(
+                    layout.ModelCatalogFile, Encoding.UTF8), ModelCatalogMaximumBytes);
+                object modelsValue;
+                object[] models = root.TryGetValue("models", out modelsValue) ?
+                    ToObjectArray(modelsValue) : null;
+                if (models == null) return fallback;
+                for (int i = 0; i < models.Length; i++)
+                {
+                    Dictionary<string, object> entry = ToObjectDictionary(models[i]);
+                    if (!string.Equals(GetString(entry, "slug"), model,
+                        StringComparison.Ordinal)) continue;
+                    string selected = GetString(entry, "default_reasoning_level");
+                    if (!string.IsNullOrEmpty(selected)) return selected;
+                    object[] levels = GetArray(entry, "supported_reasoning_levels");
+                    if (levels != null)
+                    {
+                        for (int j = 0; j < levels.Length; j++)
+                        {
+                            Dictionary<string, object> level = levels[j] as Dictionary<string, object>;
+                            selected = GetString(level, "effort");
+                            if (!string.IsNullOrEmpty(selected)) return selected;
+                        }
+                    }
+                    return null;
+                }
+            }
+            catch { }
+            return fallback;
         }
 
         internal static int CountConfiguredPlugins(string config, PortableArchitecture architecture)
@@ -9617,10 +11253,11 @@ namespace CodexPortable
     {
         private readonly TextBox keyBox;
         private readonly TextBox baseUrlBox;
-        private readonly TextBox modelBox;
+        private readonly ComboBox modelBox;
         private KeySetupResult result;
 
-        private KeySetupDialog(string currentBaseUrl, string currentModel, string currentApiKey)
+        private KeySetupDialog(string currentBaseUrl, string currentModel, string currentApiKey,
+            IList<string> catalogModelIds)
         {
             Text = LauncherLocale.T("设置 API", "Configure API");
             Font = new Font("Microsoft YaHei UI", 9F);
@@ -9662,8 +11299,21 @@ namespace CodexPortable
             baseUrlBox.Text = currentBaseUrl ?? "";
 
             AddLabel(LauncherLocale.T("网关模型名", "Gateway model"), 26, 166, 508);
-            modelBox = AddTextBox(26, 188, 508, true);
-            modelBox.MaxLength = 200;
+            modelBox = AddModelComboBox(26, 188, 508);
+            modelBox.MaxLength = 512;
+            if (catalogModelIds != null)
+            {
+                for (int i = 0; i < catalogModelIds.Count; i++)
+                {
+                    string catalogModel = catalogModelIds[i];
+                    if (ProviderConfiguration.IsValidModel(catalogModel) &&
+                        modelBox.Items.IndexOf(catalogModel) < 0)
+                        modelBox.Items.Add(catalogModel);
+                }
+            }
+            if (ProviderConfiguration.IsValidModel(currentModel) &&
+                modelBox.Items.IndexOf(currentModel) < 0)
+                modelBox.Items.Insert(0, currentModel);
             modelBox.Text = currentModel ?? "";
 
             AddLabel(LauncherLocale.T("API Key", "API key"), 26, 234, 508);
@@ -9727,6 +11377,21 @@ namespace CodexPortable
             return box;
         }
 
+        private ComboBox AddModelComboBox(int x, int y, int width)
+        {
+            ComboBox box = new ComboBox();
+            box.Location = new Point(x, y);
+            box.Size = new Size(width, 27);
+            box.DropDownStyle = ComboBoxStyle.DropDown;
+            box.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+            box.AutoCompleteSource = AutoCompleteSource.ListItems;
+            box.Font = new Font(Font.FontFamily, 9.5F);
+            box.BackColor = Color.White;
+            box.ForeColor = Color.FromArgb(15, 23, 42);
+            Controls.Add(box);
+            return box;
+        }
+
         private void SaveClicked(object sender, EventArgs e)
         {
             string key = keyBox.Text.Trim();
@@ -9748,7 +11413,7 @@ namespace CodexPortable
             string model = modelBox.Text.Trim();
             if (!ProviderConfiguration.IsValidModel(model))
             {
-                MessageBox.Show(LauncherLocale.T("模型名必须是 1–200 个不含空格或换行的字符。", "Model name must contain 1–200 characters without spaces or line breaks."), LauncherLocale.T("设置自定义 API", "Custom API"),
+                MessageBox.Show(LauncherLocale.T("模型名必须是 1–512 个不含空格或换行的字符。", "Model name must contain 1–512 characters without spaces or line breaks."), LauncherLocale.T("设置自定义 API", "Custom API"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 modelBox.Focus();
                 return;
@@ -9761,9 +11426,11 @@ namespace CodexPortable
             Close();
         }
 
-        internal static KeySetupResult Ask(IWin32Window owner, string currentBaseUrl, string currentModel, string currentApiKey)
+        internal static KeySetupResult Ask(IWin32Window owner, string currentBaseUrl, string currentModel,
+            string currentApiKey, IList<string> catalogModelIds)
         {
-            using (KeySetupDialog dialog = new KeySetupDialog(currentBaseUrl, currentModel, currentApiKey))
+            using (KeySetupDialog dialog = new KeySetupDialog(currentBaseUrl, currentModel,
+                currentApiKey, catalogModelIds))
             {
                 return dialog.ShowDialog(owner) == DialogResult.OK ? dialog.result : null;
             }

@@ -51,7 +51,7 @@ src/release-update/release.sh \
   --launcher-root ./dist \
   --bootstrapper ./build/CodexPortable.bootstrapper.exe \
   --output-root /path/to/release-parent/release \
-  --version 1.4.24.11
+  --version 1.4.24.12
 ```
 
 The command creates two direct, architecture-specific executables:
@@ -153,13 +153,13 @@ checkpoints, receipts, hashes, or manifest-comparison files.
 
 ```bash
 git add AGENTS.md README.md src/portable-launcher src/release-update dist
-git commit -m "Release LF Portable 1.4.24.11"
-git tag -a v1.4.24.11 -m "LF Portable 1.4.24.11"
-git push origin HEAD:main refs/tags/v1.4.24.11:refs/tags/v1.4.24.11
+git commit -m "Release LF Portable 1.4.24.12"
+git tag -a v1.4.24.12 -m "LF Portable 1.4.24.12"
+git push origin HEAD:main refs/tags/v1.4.24.12:refs/tags/v1.4.24.12
 src/release-update/publish-release.sh \
   --release-root /path/to/release-parent/release \
-  --version 1.4.24.11
-gh release view v1.4.24.11 --json tagName,name,assets
+  --version 1.4.24.12
+gh release view v1.4.24.12 --json tagName,name,assets
 ```
 
 Do not add a complete desktop payload, portable user data, logs, screenshots,
@@ -172,5 +172,4 @@ The launcher initializes a custom API configuration and stores its mutable
 portable state below `CodexData/data`. It starts one portable Codex instance per
 portable root while allowing an independently installed official Codex Desktop
 to run in parallel. More end-user details are included in
-`src/release-update/CodexData-README.txt`. The bundled runtime and mainland CDN
-decision are documented in `src/release-update/DEPENDENCY-AUDIT.md`.
+`src/release-update/CodexData-README.txt`.

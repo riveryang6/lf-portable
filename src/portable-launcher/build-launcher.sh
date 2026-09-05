@@ -71,6 +71,9 @@ build_target() {
         "/resource:$tray_dark_path,CodexPortable.Branding.TrayDark.ico"
         "/resource:$tray_light_path,CodexPortable.Branding.TrayLight.ico"
     )
+    if [[ $source == "$core_source" ]]; then
+        compiler_args+=("/resource:$fallback_prompt_path,CodexPortable.ModelFallbackPrompt.txt")
+    fi
     local reference
     for reference in "${references[@]}"; do
         compiler_args+=("/reference:$reference")
@@ -173,8 +176,9 @@ icon_path="$script_dir/codex.ico"
 tray_dark_path="$script_dir/codex-tray-dark.ico"
 tray_light_path="$script_dir/codex-tray-light.ico"
 manifest_path="$script_dir/CodexPortable.manifest"
+fallback_prompt_path="$script_dir/CodexModelFallbackPrompt.txt"
 for input_path in "$core_source" "$bootstrap_source" "$icon_path" "$tray_dark_path" \
-    "$tray_light_path" "$manifest_path"; do
+    "$tray_light_path" "$manifest_path" "$fallback_prompt_path"; do
     require_file "$input_path"
 done
 

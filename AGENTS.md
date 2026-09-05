@@ -70,6 +70,30 @@
 
 若任务在固定盘根目录产生 `LFPortable-*`、`lf-sandbox-*` 或 `.lf-sandbox-*` 测试暂存目录，应逐项核对归属后清理；不得对 `C:\` 根目录执行未经核对的通配删除。即使名称含 `backup`，只要目录由本任务生成且用户未明确要求保留，也按残留清理；仅保留用户明确指定保留的备份。
 
+## 领域要点
+
+### 模型目录（自定义 base_url 的 /models 合成）
+
+- 模型集合的唯一权威是每次启动前刷新的 `<base_url>/models`；网关成功返回空数组时必须删除旧 model-catalog.json 并阻止启动（防止已下线模型继续可用）；pi.dev（https://pi.dev/api/models）只做能力补充、不决定模型集合，pi.dev 失败时静默回退，网关模型照常写入。
+- 产出 `CodexData/data/config/model-catalog.json`，并在 config.toml 写入 `model_catalog_json`；默认模型为 gpt-6-astra。
+- 字段优先级：网关显式值 > pi.dev（精确 id / baseUrl / provider / 命名空间）> bundled CLI（`codex debug models --bundled`）同 slug 模板。只有存在 openai/openai-codex 供应商证据才允许套用 OpenAI 专属能力（use_responses_lite、tool_mode、comp_hash、supports_search_tool、node_repl_*）；opencode、azure 或供应商不明的同名模型不得继承。
+- pi.dev 对同一模型在不同供应商导出的 id 可能带前缀（openrouter 用 `google/gemini-…`）也可能裸 id（google 用 `gemini-…`）：选择时应把“精确 id 桶”与“去前缀后缀桶”取并集（SelectPiMetadata + ContainsPiCandidate）再按 URL/provider 匹配，不能只信任精确桶。
+- pi.dev `compat` 标志夹在 pi 顶层与 bundled 模板之间读取（ReadCatalogBoolean）：`supportsReasoningEffort=false` 保留 reasoning 但清空 supported/default_reasoning_level（网关显式 levels 仍最高）；`supports_reasoning_summary_parameter=false` 时 `default_reasoning_summary` 必须写 "none" 而非 "auto"；读取应同时接受 camelCase 与 snake_case（如 thinkingLevelMap/thinking_level_map）。验证 pi.dev 字段前先 curl https://pi.dev/api/models 看实时结构（顶层与 compat 键持续演进），不要按过时示例硬编码。
+- 不原样透传外部 model_messages：同 slug bundled 指令可复用，只允许受限 base_instructions 覆盖；无模型专属指令时使用嵌入的 CodexModelFallbackPrompt.txt（只嵌入架构 launcher，不嵌入裸 bootstrapper）。
+- 子进程读取 `codex debug models --bundled` 必须设置 `startInfo.StandardOutputEncoding = new UTF8Encoding(false)`：重定向 stdout 默认按控制台代码页解码，CJK/GBK 主机会把 UTF-8 JSON 读乱，导致模板集合为空并静默回退旧目录。
+
+### 测试与复现捷径
+
+- launcher、CLI、harness 都是 Windows PE：WSL 内不能直接 exec，需 `powershell.exe -NoProfile -Command "& 'winpath' args"` 运行，参数用 `wslpath -w` 转 Windows 路径。
+- 反射 harness（参考 `build/model-catalog-test/Harness.cs` 模式）可直接调 private static（RefreshModelCatalog / CreateCodexModelInfo / SelectPiMetadata / ReadBundledModelTemplates）做单元级验证；用 Roslyn csc（dotnet SDK 的 Roslyn/bincore/csc.dll）+ mono 4.8-api 引用编译 Windows 控制台 exe，这些 harness 与 fixture 目录都是任务临时产物，用后清理。
+- 网关 fixture 用 Windows 侧 `python.exe -m http.server <port> --bind 127.0.0.1 --directory <dir>` 起服：.NET harness 走 Windows loopback，而 WSL 内 curl 的 127.0.0.1 是 WSL 自己的回环、两者不通；验收以 Windows 侧结果为准。
+- 生成目录的可读性用探针 CLI 验收：`codex.exe debug models -c model_catalog_json='"C:\…\model-catalog.json"'`（`-c` 的值是带引号的 JSON 字符串）。
+
+### 发布载荷版本记录
+
+- 随包 notice 是组装 base 内的 `CodexData/THIRD_PARTY.txt`（release.py 原样带入成品）：每次换新 base，组装前必须按该 base 实际载荷更新其中记录的 MSIX 版本、内部 Desktop 版本与 codex-cli 版本。
+- 载荷事实以 base 实测为准：MSIX AppxManifest Identity Version、`resources/codex.exe --version`、内嵌 app 版本；不要把旧 release 文档的版本号带进新 base。
+
 ## 修改方式
 
 - 使用 `apply_patch` 进行文本修改，保持 UTF-8 编码。
