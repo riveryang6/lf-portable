@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.27")]
-[assembly: AssemblyFileVersion("1.4.24.27")]
+[assembly: AssemblyVersion("1.4.24.28")]
+[assembly: AssemblyFileVersion("1.4.24.28")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -8039,6 +8039,31 @@ namespace CodexPortable
 {
     internal static class ProviderConfiguration
     {
+        static ProviderConfiguration()
+        {
+            // Gateways behind modern CDNs/TLS require at least TLS 1.2, but
+            // the .NET Framework default inside the launcher process negotiated
+            // older protocols and failed with "Could not create SSL/TLS secure
+            // channel" for https://lv.lifaplus.com and similar hosts while
+            // curl/PowerShell succeeded.  Pin TLS 1.2 (and 1.3 when available)
+            // for every HttpWebRequest this process makes.
+            try
+            {
+                ServicePointManager.SecurityProtocol =
+                    SecurityProtocolType.Tls12 |
+                    (SecurityProtocolType)768 |   // Tls11
+                    (SecurityProtocolType)3072;  // Tls12 (explicit)
+                try
+                {
+                    ServicePointManager.SecurityProtocol =
+                        ServicePointManager.SecurityProtocol |
+                        (SecurityProtocolType)12288; // Tls13 (0x3000)
+                }
+                catch { }
+            }
+            catch { }
+        }
+
         internal const string ProviderId = "portable_custom";
         internal const string ApiKeyEnvironmentVariable = "CODEX_PORTABLE_API_KEY";
         internal const string DefaultApprovalPolicy = "never";
