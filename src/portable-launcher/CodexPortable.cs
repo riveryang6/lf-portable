@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.24")]
-[assembly: AssemblyFileVersion("1.4.24.24")]
+[assembly: AssemblyVersion("1.4.24.25")]
+[assembly: AssemblyFileVersion("1.4.24.25")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -8375,7 +8375,28 @@ namespace CodexPortable
             object root = DownloadJsonValue(BuildModelsUrl(normalized), apiKey,
                 ModelCatalogMaximumBytes);
             Dictionary<string, object> rootObject = ToObjectDictionary(root);
-            if (rootObject != null) return ReadGatewayModels(rootObject);
+            if (rootObject != null)
+            {
+                // Some gateways answer an invalid token with HTTP 200 plus an
+                // error body instead of 401; surface that instead of the
+                // misleading "unreachable" hint.
+                Dictionary<string, object> errorObject = ToObjectDictionary(
+                    GetValue(rootObject, "error"));
+                if (errorObject != null)
+                {
+                    string errorMessage = GetString(errorObject, "message") ??
+                        GetString(errorObject, "Message") ??
+                        GetString(errorObject, "type");
+                    if (!string.IsNullOrEmpty(errorMessage))
+                    {
+                        if (errorMessage.Length > 200)
+                            errorMessage = errorMessage.Substring(0, 200);
+                        throw new InvalidDataException(
+                            "Gateway error: " + errorMessage);
+                    }
+                }
+                return ReadGatewayModels(rootObject);
+            }
             object[] rootArray = ToJsonArray(root);
             if (rootArray == null)
                 throw new InvalidDataException("The custom API model response is not an object or array.");
