@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.23")]
-[assembly: AssemblyFileVersion("1.4.24.23")]
+[assembly: AssemblyVersion("1.4.24.24")]
+[assembly: AssemblyFileVersion("1.4.24.24")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -11725,8 +11725,11 @@ namespace CodexPortable
                     prefetchRunning = false;
                     if (modelIds == null)
                     {
-                        SetModelStatus(LauncherLocale.T("无法从网关读取模型列表（网关不可达？可手动输入模型名）。",
-                            "Could not load the model list from the gateway (unreachable? you can type a model name)."),
+                        string detail = string.IsNullOrEmpty(errorText) ? "" : "  " +
+                            (errorText.Length > 220 ? errorText.Substring(0, 220) : errorText);
+                        SetModelStatus(LauncherLocale.T(
+                            "无法从网关读取模型列表（网关不可达？可手动输入模型名）。" + detail,
+                            "Could not load the model list from the gateway (unreachable? you can type a model name)." + detail),
                             Color.FromArgb(217, 119, 6));
                     }
                     else if (modelIds.Count == 0)
