@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.22")]
-[assembly: AssemblyFileVersion("1.4.24.22")]
+[assembly: AssemblyVersion("1.4.24.23")]
+[assembly: AssemblyFileVersion("1.4.24.23")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -11748,6 +11748,14 @@ namespace CodexPortable
                         SetModelStatus(LauncherLocale.T("已从网关读取 " + modelIds.Count.ToString() + " 个模型，请在框中选择默认模型。",
                             "Loaded " + modelIds.Count.ToString() + " models from the gateway; choose the default model."),
                             Color.FromArgb(5, 150, 105));
+                        // Surface the freshly loaded choices immediately so the
+                        // user sees the model list pop up instead of an unchanged
+                        // single-line box.
+                        if (modelBox.Items.Count > 0)
+                        {
+                            try { modelBox.DroppedDown = true; }
+                            catch { }
+                        }
                     }
                     if (prefetchAgain)
                     {
