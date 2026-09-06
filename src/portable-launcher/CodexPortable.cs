@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.26")]
-[assembly: AssemblyFileVersion("1.4.24.26")]
+[assembly: AssemblyVersion("1.4.24.27")]
+[assembly: AssemblyFileVersion("1.4.24.27")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -8319,10 +8319,11 @@ namespace CodexPortable
         }
 
         internal static bool TryDiscoverApiBase(string input, string apiKey,
-            out string workingBase, out List<string> modelIds)
+            out string workingBase, out List<string> modelIds, out string lastError)
         {
             workingBase = null;
             modelIds = null;
+            lastError = null;
             string normalized;
             if (!TryNormalizeBaseUrl(input, out normalized)) return false;
             List<string> candidates = new List<string>();
@@ -8352,7 +8353,12 @@ namespace CodexPortable
                     modelIds = ids;
                     return true;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    if (!string.IsNullOrEmpty(ex.Message))
+                        lastError = ex.Message.Length > 220 ?
+                            ex.Message.Substring(0, 220) : ex.Message;
+                }
             }
             return false;
         }
@@ -11732,9 +11738,12 @@ namespace CodexPortable
                 try
                 {
                     string working;
+                    string lastErrorText;
                     if (ProviderConfiguration.TryDiscoverApiBase(baseUrl, key,
-                            out working, out modelIds))
+                            out working, out modelIds, out lastErrorText))
                         discoveredApiBase = working;
+                    else if (!string.IsNullOrEmpty(lastErrorText))
+                        errorText = lastErrorText;
                 }
                 catch (Exception ex)
                 {
