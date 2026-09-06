@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.25")]
-[assembly: AssemblyFileVersion("1.4.24.25")]
+[assembly: AssemblyVersion("1.4.24.26")]
+[assembly: AssemblyFileVersion("1.4.24.26")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable

@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.25")]
-[assembly: AssemblyFileVersion("1.4.24.25")]
+[assembly: AssemblyVersion("1.4.24.26")]
+[assembly: AssemblyFileVersion("1.4.24.26")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -779,7 +779,11 @@ namespace CodexPortableBootstrap
                                 progress.UpdateProgress(completedBytes, totalBytes, i,
                                     entries.Count);
                             }
-                            output.Flush(true);
+                            // Never fsync the payload write: a slow or
+                            // briefly unresponsive removable volume can stall
+                            // indefinitely on FLUSH_CACHE.  The stream is
+                            // verified by length and repaired by the next run.
+                            output.Flush();
                         }
                         if (written != item.ArchiveEntry.Length)
                             throw new InvalidDataException(
@@ -855,11 +859,19 @@ namespace CodexPortableBootstrap
                     if (replaceItem && item.ArchiveEntry.Length > LargeCommitStreamThreshold &&
                         File.Exists(staged))
                     {
-                        // A same-volume rename normally is instant, but on slow
-                        // removable media a locked/exFAT rename can stall for
-                        // minutes with no way to pump the window.  Stream large
-                        // inputs into place with visible progress instead.
-                        CommitStagedLargeFile(staged, item.TargetPath, progress);
+                        // Skip the streaming commit when the staged payload is
+                        // already identical to what is installed (launcher-only
+                        // bumps); otherwise stream the large input into place
+                        // with visible progress.
+                        if (PathExists(item.TargetPath) &&
+                            StagedInputMatchesExisting(staged, item.TargetPath))
+                        {
+                            File.Delete(staged);
+                        }
+                        else
+                        {
+                            CommitStagedLargeFile(staged, item.TargetPath, progress);
+                        }
                     }
                     else
                     {
@@ -1248,6 +1260,65 @@ namespace CodexPortableBootstrap
 
         private const long LargeCommitStreamThreshold = 32L * 1024L * 1024L;
 
+        private static bool StagedInputMatchesExisting(string staged, string existing)
+        {
+            // Launcher-only version bumps ship the very same payload packages.
+            // Rewriting ~1.5 GB of identical data on a slow stick for every
+            // micro release is what made "正在更新程序文件" sit for minutes
+            // (and risk device stalls).  Compare a handful of samples instead;
+            // any difference falls back to the full streaming commit.
+            try
+            {
+                FileInfo stagedInfo = new FileInfo(staged);
+                FileInfo existingInfo = new FileInfo(existing);
+                if (stagedInfo.Length != existingInfo.Length || stagedInfo.Length <= 0)
+                    return false;
+                long length = stagedInfo.Length;
+                long[] offsets = new long[] {
+                    0, length / 4, length / 2, length - length / 4, length - 4096
+                };
+                if (offsets[4] < 0) offsets[4] = 0;
+                byte[] stagedBuffer = new byte[4096];
+                byte[] existingBuffer = new byte[4096];
+                using (FileStream stagedStream = new FileStream(staged, FileMode.Open,
+                    FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan))
+                using (FileStream existingStream = new FileStream(existing, FileMode.Open,
+                    FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan))
+                {
+                    for (int i = 0; i < offsets.Length; i++)
+                    {
+                        long position = Math.Min(offsets[i], length - 4096);
+                        stagedStream.Position = position;
+                        existingStream.Position = position;
+                        int stagedRead = ReadFully(stagedStream, stagedBuffer, 4096);
+                        int existingRead = ReadFully(existingStream, existingBuffer, 4096);
+                        if (stagedRead != existingRead) return false;
+                        for (int j = 0; j < stagedRead; j++)
+                            if (stagedBuffer[j] != existingBuffer[j]) return false;
+                    }
+                }
+                return true;
+            }
+            catch
+            {
+                // Any read hiccup simply falls back to the streaming commit.
+                return false;
+            }
+        }
+
+        private static int ReadFully(FileStream stream, byte[] buffer, int count)
+        {
+            int total = 0;
+            while (total < count)
+            {
+                int read = stream.Read(buffer, total, count - total);
+                if (read == 0) break;
+                total += read;
+            }
+            return total;
+        }
+
+
         private static void CommitStagedLargeFile(string source, string destination,
             PayloadProgressForm progress)
         {
@@ -1278,7 +1349,9 @@ namespace CodexPortableBootstrap
                         if (progress != null)
                             progress.PulseCopy(written, sourceInfo.Length);
                     }
-                    output.Flush(true);
+                    // Never fsync the payload write (see above); the
+                    // staged/committed length check guards completeness.
+                    output.Flush();
                     if (written != sourceInfo.Length)
                         throw new InvalidDataException(
                             "The staged input ended unexpectedly: " + source);
