@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.18")]
-[assembly: AssemblyFileVersion("1.4.24.18")]
+[assembly: AssemblyVersion("1.4.24.20")]
+[assembly: AssemblyFileVersion("1.4.24.20")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -2623,7 +2623,7 @@ namespace CodexPortable
         private const string OfficialPortableUserDataResolverText =
             "function w({appDataPath:e,buildFlavor:n,env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(i)return(0,o.resolve)(i);let a=t.Ua(n),s=(0,o.join)(e,a==null?`Codex`:`Codex (${a})`),c=r.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&c!=null?(0,o.join)(s,`agent`,c):s}";
         private static readonly string PortableUserDataResolverText =
-            "function w({let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();return i&&r.CODEX_PORTABLE_ROOT?(0,o.resolve)(i):(a.dialog.showErrorBox(`LF Portable`,`Open CodexPortable.exe from the USB drive.`),process.exit(1))                                                                            }".
+            "function w({env:r}){let i=r.CODEX_ELECTRON_USER_DATA_PATH?.trim();return i&&r.CODEX_PORTABLE_ROOT?(0,o.resolve)(i):(a.dialog.showErrorBox(`LF Portable`,`Open CodexPortable.exe from the USB drive.`),process.exit(1))}".
                 PadRight(OfficialPortableUserDataResolverText.Length);
         private const string OfficialCloseToTrayText =
             "canHideLastWindowToTray?.()===!0&&!t){e.preventDefault(),P.hide();return}";
@@ -2700,6 +2700,16 @@ namespace CodexPortable
             "function hc(e,t){return e.finalStep.shouldShow&&!t?X.WindowsSandboxSetup:X.Complete}";
         private static readonly string PortableWindowsSandboxFinalStepText =
             "function hc(e,t){return X.Complete}".PadRight(OfficialWindowsSandboxFinalStepText.Length);
+        // 26.901 split the sandbox status into a second module chain that the
+        // older composer gate does not cover: wNr mounts the persistent
+        // "Finish Windows setup to continue" status card (vNr -> hNr -> gNr)
+        // whenever the composer banner is armed.  Keep that mount disabled so
+        // the portable build never blocks the composer on Windows-setup
+        // readiness that the launcher cannot satisfy unelevated.
+        private const string OfficialWindowsSandboxBannerMountText =
+            "!n&&i?(0,e7.jsx)(vNr,{cwd:a===`/`||o?null:a,requirement:s,setShowWindowsSandboxBanner:c}):null";
+        private static readonly string PortableWindowsSandboxBannerMountText =
+            "!0&&0?(0,e7.jsx)(vNr,{cwd:a===`/`||o?null:a,requirement:s,setShowWindowsSandboxBanner:c}):null";
         private const int OnboardingBrandPaddingLength = 2;
         // English defaults live in onboarding-page. Localized assets are
         // discovered from their message keys below so a new locale or a
@@ -3439,6 +3449,7 @@ namespace CodexPortable
                 int deepResearchPluginReconcileAvailabilityEntries = 0;
                 int sunsetUpdateGateEntries = 0;
                 int windowsSandboxComposerStateEntries = 0;
+                int windowsSandboxBannerMountEntries = 0;
                 for (int i = 0; i < archive.Entries.Count; i++)
                 {
                     AsarEntry entry = archive.Entries[i];
@@ -3493,6 +3504,9 @@ namespace CodexPortable
                         windowsSandboxComposerStateEntries += EnsurePattern(archive, entry,
                             OfficialWindowsSandboxComposerStateText,
                             PortableWindowsSandboxComposerStateText, 1, true);
+                        windowsSandboxBannerMountEntries += EnsurePattern(archive, entry,
+                            OfficialWindowsSandboxBannerMountText,
+                            PortableWindowsSandboxBannerMountText, 1, true);
                         portableUserDataResolverEntries += EnsurePattern(archive, entry,
                             OfficialPortableUserDataResolverText,
                             PortableUserDataResolverText);
@@ -3544,6 +3558,10 @@ namespace CodexPortable
                 if (windowsSandboxComposerStateEntries != 1)
                     throw new InvalidDataException(
                         "Electron Windows-sandbox composer state target is missing or ambiguous.");
+
+                if (windowsSandboxBannerMountEntries != 1)
+                    throw new InvalidDataException(
+                        "Electron Windows-sandbox banner mount target is missing or ambiguous.");
 
 
                 List<OnboardingEntryTarget> onboardingEntries = FindOnboardingEntries(archive);
@@ -6352,6 +6370,21 @@ namespace CodexPortable
             Dictionary<string, string> environment = PortableEnvironment.Build(layout, apiKey);
             try
             {
+                string debugPort = Environment.GetEnvironmentVariable("LF_DEBUG_CDP_PORT");
+                int debugPortValue;
+                if (!string.IsNullOrEmpty(debugPort) && int.TryParse(debugPort,
+                        NumberStyles.None, CultureInfo.InvariantCulture, out debugPortValue) &&
+                    debugPortValue > 0 && debugPortValue <= 65535)
+                {
+                    // Diagnostic hook: expose the Electron renderer over the
+                    // Chrome DevTools Protocol for UI automation (read DOM,
+                    // screenshot, click) even when the window is not visible
+                    // to this session.  Off by default; used only for local
+                    // verification and never in published defaults.
+                    arguments = arguments + " --remote-debugging-port=" +
+                        debugPortValue.ToString(CultureInfo.InvariantCulture) +
+                        " --remote-allow-origins=*";
+                }
                 return JobRun.Start(layout.AppExe, arguments, layout.CurrentApp, environment,
                     layout.RootToken);
             }
@@ -8310,6 +8343,27 @@ namespace CodexPortable
             Dictionary<string, object> gateway = new Dictionary<string, object>(
                 StringComparer.Ordinal);
             gateway["id"] = model;
+            // An offline first run must still expose the model's reasoning
+            // presets; without them the desktop defaults to a mid tier and
+            // shows no max dial.  The configured default model advertises the
+            // full set including the portable default effort.
+            gateway["reasoning"] = true;
+            bool isDefaultModel = string.Equals(model, DefaultModel,
+                StringComparison.Ordinal);
+            string[] offlinePresets = isDefaultModel ?
+                new string[] { "low", "medium", "high", "max" } :
+                new string[] { "low", "medium", "high" };
+            List<object> offlineLevels = new List<object>();
+            for (int i = 0; i < offlinePresets.Length; i++)
+            {
+                Dictionary<string, object> level = new Dictionary<string, object>(
+                    StringComparer.Ordinal);
+                level["effort"] = offlinePresets[i];
+                level["description"] = ReasoningDescription(offlinePresets[i]);
+                offlineLevels.Add(level);
+            }
+            gateway["supported_reasoning_levels"] = offlineLevels.ToArray();
+            if (isDefaultModel) gateway["default_reasoning_level"] = "max";
             models.Add(CreateCodexModelInfo(model, gateway, null, null,
                 DefaultModelInstructions, 1));
             WriteModelCatalog(layout, models.ToArray());
@@ -8988,6 +9042,12 @@ namespace CodexPortable
             if (defaultEffort != null && !efforts.Contains(defaultEffort)) defaultEffort = null;
             if (defaultEffort == null && efforts.Count > 0)
                 defaultEffort = ChooseDefaultReasoningEffort(efforts);
+            // Product contract: the portable default model opens with the max
+            // reasoning dial whenever the provider exposes it, even if the
+            // gateway advertises a lower default.
+            if (reasoning && string.Equals(modelId, DefaultModel,
+                StringComparison.Ordinal) && efforts.Contains("max"))
+                defaultEffort = "max";
             result["default_reasoning_level"] = defaultEffort;
             result["supported_reasoning_levels"] = NormalizeReasoningPresets(
                 GetValueAnyWithFallback(gateway, capabilities,

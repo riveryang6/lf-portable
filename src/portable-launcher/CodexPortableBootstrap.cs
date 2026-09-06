@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.18")]
-[assembly: AssemblyFileVersion("1.4.24.18")]
+[assembly: AssemblyVersion("1.4.24.20")]
+[assembly: AssemblyFileVersion("1.4.24.20")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -688,16 +688,60 @@ namespace CodexPortableBootstrap
             "portable-package-manifest.json"
         };
 
+        // The whole release extraction runs on a background thread while the
+        // progress window keeps pumping on the UI thread.  A slow USB volume
+        // can stall an individual file-system call for many seconds (large
+        // renames, antivirus scanning); doing that on the UI thread is what
+        // turned the window into an unresponsive ghost the moment it was
+        // clicked.  All progress calls from the worker are marshaled back.
         private static void ExtractReleaseInputs(string portableRoot, string dataRoot,
             bool dataExists, string rootToken, bool replaceExisting,
             List<PayloadEntry> entries, long totalBytes)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            using (PayloadProgressForm progress = new PayloadProgressForm())
+            {
+                progress.Show();
+                Exception failure = null;
+                bool done = false;
+                Thread worker = new Thread(new ThreadStart(delegate
+                {
+                    try
+                    {
+                        ExtractReleaseInputsCore(portableRoot, dataRoot, dataExists,
+                            rootToken, replaceExisting, entries, totalBytes, progress);
+                    }
+                    catch (Exception ex) { failure = ex; }
+                    finally { done = true; }
+                }));
+                worker.IsBackground = true;
+                worker.Name = "LF Portable extract worker";
+                worker.Start();
+                while (!done)
+                {
+                    Application.DoEvents();
+                    Thread.Sleep(15);
+                }
+                Application.DoEvents();
+                if (failure != null)
+                {
+                    progress.Hide();
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(
+                        failure).Throw();
+                }
+            }
+        }
+
+        private static void ExtractReleaseInputsCore(string portableRoot, string dataRoot,
+            bool dataExists, string rootToken, bool replaceExisting,
+            List<PayloadEntry> entries, long totalBytes, PayloadProgressForm progress)
         {
             string stagingName = ".CodexData.extracting-" +
                 Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "-" +
                 Guid.NewGuid().ToString("N");
             string stagingRoot = Path.Combine(portableRoot, stagingName);
             BootLog.Write(portableRoot, "extract begin dataExists=" + dataExists);
-            PayloadProgressForm progress = null;
             List<DerivedStateEntry> movedDerived = null;
             bool retainStaging = false;
             Mutex mutation = null;
@@ -705,10 +749,6 @@ namespace CodexPortableBootstrap
             try
             {
                 EnsureSafeDirectory(portableRoot, stagingRoot);
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                progress = new PayloadProgressForm();
-                progress.Show();
                 progress.UpdateProgress(0, totalBytes, 0, entries.Count);
 
                 byte[] buffer = new byte[CopyBufferSize];
@@ -850,12 +890,7 @@ namespace CodexPortableBootstrap
             }
             finally
             {
-                if (progress != null)
-                {
-                    progress.Close();
-                    progress.Dispose();
-                }
-                BootLog.Write(portableRoot, "progress closed");
+                BootLog.Write(portableRoot, "extract core finished");
                 if (mutation != null)
                 {
                     try { if (mutationAcquired) mutation.ReleaseMutex(); }
@@ -1766,18 +1801,35 @@ namespace CodexPortableBootstrap
 
         internal void Pump()
         {
+            if (InvokeRequired) return;
             Refresh();
             Application.DoEvents();
         }
 
         internal void UpdateStatus(string text)
         {
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action<string>(UpdateStatus), text); }
+                catch (InvalidOperationException) { }
+                return;
+            }
             status.Text = text ?? status.Text;
             Pump();
         }
 
         internal void PulseCopy(long completedBytes, long totalBytes)
         {
+            if (InvokeRequired)
+            {
+                try
+                {
+                    BeginInvoke(new Action<long, long>(PulseCopy), completedBytes,
+                        totalBytes);
+                }
+                catch (InvalidOperationException) { }
+                return;
+            }
             if (uiUpdate.ElapsedMilliseconds < 100) return;
             uiUpdate.Restart();
             details.Text = string.Format(CultureInfo.InvariantCulture,
@@ -1789,6 +1841,16 @@ namespace CodexPortableBootstrap
         internal void UpdateProgress(long completedBytes, long totalBytes,
             int completedFiles, int totalFiles)
         {
+            if (InvokeRequired)
+            {
+                try
+                {
+                    BeginInvoke(new Action<long, long, int, int>(UpdateProgress),
+                        completedBytes, totalBytes, completedFiles, totalFiles);
+                }
+                catch (InvalidOperationException) { }
+                return;
+            }
             if (completedBytes < totalBytes && uiUpdate.ElapsedMilliseconds < 100) return;
             uiUpdate.Restart();
             int value = totalBytes <= 0 ? 0 :
