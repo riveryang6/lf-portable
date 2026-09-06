@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.20")]
-[assembly: AssemblyFileVersion("1.4.24.20")]
+[assembly: AssemblyVersion("1.4.24.21")]
+[assembly: AssemblyFileVersion("1.4.24.21")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -8257,7 +8257,20 @@ namespace CodexPortable
             if (!https && !loopbackHttp) return false;
             if (string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo) ||
                 !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)) return false;
-            normalized = uri.AbsoluteUri.TrimEnd('/');
+            // Strip a full endpoint the user may have pasted (…/v1/chat/completions,
+            // …/chat/completions, …/v1/responses, …/responses, …/completions) back
+            // to the API base so both the /models probe and the desktop requests
+            // built later on this value stay consistent for every URL shape.
+            string basePath = uri.AbsolutePath.TrimEnd('/');
+            string lowerPath = basePath.ToLowerInvariant();
+            if (lowerPath.EndsWith("/chat/completions"))
+                basePath = basePath.Substring(0,
+                    basePath.Length - "/chat/completions".Length);
+            else if (lowerPath.EndsWith("/responses"))
+                basePath = basePath.Substring(0, basePath.Length - "/responses".Length);
+            else if (lowerPath.EndsWith("/completions"))
+                basePath = basePath.Substring(0, basePath.Length - "/completions".Length);
+            normalized = (uri.Scheme + "://" + uri.Authority + basePath).TrimEnd('/');
             return normalized.Length > 0;
         }
 
@@ -8508,7 +8521,21 @@ namespace CodexPortable
 
         private static string BuildModelsUrl(string baseUrl)
         {
-            return baseUrl.TrimEnd('/') + "/models";
+            string value = (baseUrl ?? "").Trim().TrimEnd('/');
+            if (value.Length == 0) return value;
+            string lower = value.ToLowerInvariant();
+            // Accept every shape users paste: plain origin, an origin with the
+            // API version (…/v1), or a full endpoint (…/v1/chat/completions,
+            // …/chat/completions, …/v1/responses, …/responses).  The /models
+            // probe is derived from the API base, so known full-endpoint tails
+            // are stripped back to that base first.
+            if (lower.EndsWith("/chat/completions"))
+                value = value.Substring(0, value.Length - "/chat/completions".Length);
+            else if (lower.EndsWith("/responses"))
+                value = value.Substring(0, value.Length - "/responses".Length);
+            else if (lower.EndsWith("/completions"))
+                value = value.Substring(0, value.Length - "/completions".Length);
+            return value.TrimEnd('/') + "/models";
         }
 
         private static Dictionary<string, Dictionary<string, object>> ReadBundledModelTemplates(
@@ -11444,7 +11471,7 @@ namespace CodexPortable
             MinimizeBox = false;
             MaximizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 384);
+            ClientSize = new Size(560, 410);
             BackColor = Color.FromArgb(244, 246, 248);
 
             Panel header = new Panel();
@@ -11471,13 +11498,19 @@ namespace CodexPortable
             headerTitle.Location = new Point(76, 17);
             header.Controls.Add(headerTitle);
 
-            AddLabel(LauncherLocale.T("Responses API 基础 URL", "Responses API Base URL"), 26, 88, 508);
-            baseUrlBox = AddTextBox(26, 120, 508, true);
+            AddLabel(LauncherLocale.T("Responses API 基础 URL", "Responses API Base URL"), 26, 84, 508);
+            baseUrlBox = AddTextBox(26, 110, 508, true);
             baseUrlBox.MaxLength = 2048;
             baseUrlBox.Text = currentBaseUrl ?? "";
 
-            AddLabel(LauncherLocale.T("网关模型名 / 默认模型", "Gateway model / default model"), 26, 164, 508);
-            modelBox = AddModelComboBox(26, 186, 508);
+            AddLabel(LauncherLocale.T("API Key", "API key"), 26, 148, 508);
+            keyBox = AddTextBox(26, 174, 508, true);
+            keyBox.MaxLength = 1024;
+            keyBox.UseSystemPasswordChar = true;
+            keyBox.Text = currentApiKey ?? "";
+
+            AddLabel(LauncherLocale.T("网关模型名 / 默认模型", "Gateway model / default model"), 26, 212, 508);
+            modelBox = AddModelComboBox(26, 238, 508);
             modelBox.MaxLength = 512;
             if (catalogModelIds != null)
             {
@@ -11495,20 +11528,14 @@ namespace CodexPortable
             modelBox.Text = SelectDefaultModel(currentModel, modelBox.Items);
 
             modelStatusLabel = new Label();
-            modelStatusLabel.Location = new Point(26, 216);
-            modelStatusLabel.Size = new Size(508, 18);
+            modelStatusLabel.Location = new Point(26, 282);
+            modelStatusLabel.Size = new Size(508, 32);
             modelStatusLabel.Font = new Font(Font.FontFamily, 8F);
             modelStatusLabel.ForeColor = Color.FromArgb(100, 116, 139);
             modelStatusLabel.Text = LauncherLocale.T(
                 "输入 API URL 与 Key 后会自动从网关读取模型列表，在框中选择默认模型；网关不可达时可手动输入。",
                 "The model list is loaded from the gateway once you enter the API URL and key; choose the default model from the box, or type one when the gateway is unreachable.");
             Controls.Add(modelStatusLabel);
-
-            AddLabel(LauncherLocale.T("API Key", "API key"), 26, 242, 508);
-            keyBox = AddTextBox(26, 264, 508, true);
-            keyBox.MaxLength = 1024;
-            keyBox.UseSystemPasswordChar = true;
-            keyBox.Text = currentApiKey ?? "";
 
             prefetchTimer = new System.Windows.Forms.Timer();
             prefetchTimer.Interval = ModelPrefetchDelayMilliseconds;
@@ -11523,7 +11550,7 @@ namespace CodexPortable
 
             Button save = new Button();
             save.Text = LauncherLocale.T("保存", "Save");
-            save.Location = new Point(344, 306);
+            save.Location = new Point(344, 356);
             save.Size = new Size(90, 34);
             save.Font = new Font(Font.FontFamily, 9F, FontStyle.Bold);
             save.BackColor = Color.FromArgb(16, 163, 127);
@@ -11537,7 +11564,7 @@ namespace CodexPortable
             Button cancel = new Button();
             cancel.Text = LauncherLocale.T("取消", "Cancel");
             cancel.DialogResult = DialogResult.Cancel;
-            cancel.Location = new Point(444, 306);
+            cancel.Location = new Point(444, 356);
             cancel.Size = new Size(90, 34);
             cancel.ForeColor = Color.FromArgb(30, 41, 59);
             cancel.BackColor = Color.White;
