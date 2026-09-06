@@ -28,8 +28,8 @@ using System.Xml;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.21")]
-[assembly: AssemblyFileVersion("1.4.24.21")]
+[assembly: AssemblyVersion("1.4.24.22")]
+[assembly: AssemblyFileVersion("1.4.24.22")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortable
@@ -8250,6 +8250,10 @@ namespace CodexPortable
             string value = (input ?? "").Trim();
             if (value.Length == 0 || value.Length > 2048) return false;
             if (value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0 || value.IndexOf('\0') >= 0) return false;
+            // Accept a bare host (lv.lifaplus.com) and host:port forms by
+            // defaulting to HTTPS when no scheme was typed.
+            if (value.IndexOf("://", StringComparison.Ordinal) < 0)
+                value = "https://" + value;
             Uri uri;
             if (!Uri.TryCreate(value, UriKind.Absolute, out uri)) return false;
             bool https = string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
@@ -8312,6 +8316,45 @@ namespace CodexPortable
             }
             catch { result.Clear(); }
             return result;
+        }
+
+        internal static bool TryDiscoverApiBase(string input, string apiKey,
+            out string workingBase, out List<string> modelIds)
+        {
+            workingBase = null;
+            modelIds = null;
+            string normalized;
+            if (!TryNormalizeBaseUrl(input, out normalized)) return false;
+            List<string> candidates = new List<string>();
+            candidates.Add(normalized);
+            try
+            {
+                Uri uri = new Uri(normalized, UriKind.Absolute);
+                if (uri.AbsolutePath.TrimEnd('/').Length == 0)
+                {
+                    // Host-only inputs usually belong to an OpenAI-compatible
+                    // gateway whose API lives under /v1; probe it as a fallback
+                    // when the origin itself does not answer /models.
+                    candidates.Add(normalized + "/v1");
+                }
+            }
+            catch { }
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                try
+                {
+                    List<Dictionary<string, object>> models =
+                        FetchGatewayModels(candidates[i], apiKey);
+                    List<string> ids = new List<string>();
+                    for (int j = 0; j < models.Count; j++)
+                        ids.Add(GetModelId(models[j]));
+                    workingBase = candidates[i];
+                    modelIds = ids;
+                    return true;
+                }
+                catch { }
+            }
+            return false;
         }
 
         internal static List<string> FetchGatewayModelIds(string baseUrl, string apiKey)
@@ -11459,6 +11502,8 @@ namespace CodexPortable
         private bool prefetchRunning;
         private bool prefetchAgain;
         private int prefetchVersion;
+        private string discoveredApiBase;
+        private bool updatingBaseProgrammatically;
         private const int ModelPrefetchDelayMilliseconds = 800;
 
         private KeySetupDialog(string currentBaseUrl, string currentModel, string currentApiKey,
@@ -11544,7 +11589,10 @@ namespace CodexPortable
                 prefetchTimer.Stop();
                 StartModelPrefetch();
             };
-            baseUrlBox.TextChanged += delegate { ScheduleModelPrefetch(); };
+            baseUrlBox.TextChanged += delegate
+            {
+                if (!updatingBaseProgrammatically) ScheduleModelPrefetch();
+            };
             keyBox.TextChanged += delegate { ScheduleModelPrefetch(); };
             ScheduleModelPrefetch();
 
@@ -11662,7 +11710,10 @@ namespace CodexPortable
                 string errorText = null;
                 try
                 {
-                    modelIds = ProviderConfiguration.FetchGatewayModelIds(baseUrl, key);
+                    string working;
+                    if (ProviderConfiguration.TryDiscoverApiBase(baseUrl, key,
+                            out working, out modelIds))
+                        discoveredApiBase = working;
                 }
                 catch (Exception ex)
                 {
@@ -11686,6 +11737,14 @@ namespace CodexPortable
                     else
                     {
                         ApplyGatewayModelList(modelIds);
+                        if (discoveredApiBase != null &&
+                            !string.Equals(discoveredApiBase, baseUrl,
+                                StringComparison.Ordinal))
+                        {
+                            updatingBaseProgrammatically = true;
+                            try { baseUrlBox.Text = discoveredApiBase; }
+                            finally { updatingBaseProgrammatically = false; }
+                        }
                         SetModelStatus(LauncherLocale.T("已从网关读取 " + modelIds.Count.ToString() + " 个模型，请在框中选择默认模型。",
                             "Loaded " + modelIds.Count.ToString() + " models from the gateway; choose the default model."),
                             Color.FromArgb(5, 150, 105));
@@ -11739,7 +11798,8 @@ namespace CodexPortable
                 return;
             }
             string baseUrl;
-            if (!ProviderConfiguration.TryNormalizeBaseUrl(baseUrlBox.Text, out baseUrl))
+            string rawBaseUrl = discoveredApiBase ?? baseUrlBox.Text;
+            if (!ProviderConfiguration.TryNormalizeBaseUrl(rawBaseUrl, out baseUrl))
             {
                 MessageBox.Show(LauncherLocale.T("Base URL 必须是绝对 HTTPS 地址；仅 localhost/127.0.0.1/::1 可使用 HTTP，且不能含账号、查询参数或片段。", "Base URL must be an absolute HTTPS address; HTTP is allowed only for localhost/127.0.0.1/::1, without credentials, query or fragment."), LauncherLocale.T("设置自定义 API", "Custom API"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
