@@ -20,8 +20,8 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("LF")]
 [assembly: AssemblyProduct("LF Portable")]
 [assembly: AssemblyCopyright("Copyright (c) 2026")]
-[assembly: AssemblyVersion("1.4.24.28")]
-[assembly: AssemblyFileVersion("1.4.24.28")]
+[assembly: AssemblyVersion("1.4.24.29")]
+[assembly: AssemblyFileVersion("1.4.24.29")]
 [assembly: ComVisible(false)]
 
 namespace CodexPortableBootstrap
@@ -612,6 +612,110 @@ namespace CodexPortableBootstrap
             return total;
         }
 
+        // Launcher-only releases carry an identical payload (same MSIX/common
+        // package bytes).  Persisting each payload entry's size under a base
+        // identity lets later runs skip re-copying megabytes of unchanged data
+        // on slow USB media.  PayloadIdentity MUST be bumped together with the
+        // release base (see build/release-base-*): a real base change without
+        // a new identity would otherwise keep stale same-length packages.
+        private const string PayloadFingerprintFileName = "payload-fingerprints.txt";
+        private const string PayloadIdentity = "codex-26.901.5003.0";
+        private const long PayloadFingerprintSkipMinimumBytes = 16L * 1024L * 1024L;
+
+        private static string PayloadFingerprintPath(string dataRoot)
+        {
+            return Path.Combine(dataRoot, PayloadFingerprintFileName);
+        }
+
+        private static void SavePayloadFingerprints(string dataRoot,
+            List<PayloadEntry> entries)
+        {
+            try
+            {
+                if (dataRoot == null || entries == null || entries.Count == 0) return;
+                string path = PayloadFingerprintPath(dataRoot);
+                string temporary = path + ".tmp";
+                using (StreamWriter writer = new StreamWriter(temporary, false,
+                    new UTF8Encoding(false)))
+                {
+                    writer.Write("#id ");
+                    writer.Write(PayloadIdentity);
+                    writer.WriteLine();
+                    for (int i = 0; i < entries.Count; i++)
+                    {
+                        ZipArchiveEntry entry = entries[i].ArchiveEntry;
+                        writer.Write(entries[i].RelativePath);
+                        writer.Write('\t');
+                        writer.Write(entry.Length.ToString(
+                            CultureInfo.InvariantCulture));
+                        writer.WriteLine();
+                    }
+                }
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(temporary, path);
+            }
+            catch
+            {
+                // A missing fingerprint only costs one full re-copy later.
+            }
+        }
+
+        private static void LoadPayloadFingerprints(string dataRoot,
+            List<PayloadEntry> entries, Dictionary<string, bool> skip)
+        {
+            if (dataRoot == null || entries == null || skip == null) return;
+            string path = PayloadFingerprintPath(dataRoot);
+            if (!File.Exists(path)) return;
+            Dictionary<string, long> known = new Dictionary<string, long>(
+                StringComparer.Ordinal);
+            try
+            {
+                string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+                if (lines.Length == 0) return;
+                if (!lines[0].StartsWith("#id ", StringComparison.Ordinal) ||
+                    !string.Equals(lines[0].Substring(4).Trim(), PayloadIdentity,
+                        StringComparison.Ordinal))
+                    return;
+                for (int i = 1; i < lines.Length; i++)
+                {
+                    string line = lines[i];
+                    int first = line.IndexOf('\t');
+                    if (first <= 0) continue;
+                    long markerLength;
+                    if (!long.TryParse(line.Substring(first + 1), NumberStyles.None,
+                            CultureInfo.InvariantCulture, out markerLength))
+                        continue;
+                    known[line.Substring(0, first)] = markerLength;
+                }
+            }
+            catch { return; }
+            for (int i = 0; i < entries.Count; i++)
+            {
+                string relativePath = entries[i].RelativePath;
+                long markerLength;
+                if (!known.TryGetValue(relativePath, out markerLength)) continue;
+                ZipArchiveEntry archiveEntry = entries[i].ArchiveEntry;
+                if (archiveEntry == null ||
+                    archiveEntry.Length < PayloadFingerprintSkipMinimumBytes ||
+                    archiveEntry.Length != markerLength) continue;
+                string target = TargetForEntry(dataRoot, relativePath);
+                try
+                {
+                    if (File.Exists(target) &&
+                        new FileInfo(target).Length == markerLength)
+                        skip[relativePath] = true;
+                }
+                catch { }
+            }
+        }
+
+        private static string TargetForEntry(string dataRoot, string relativePath)
+        {
+            return Path.Combine(dataRoot,
+                relativePath.Substring(DataPrefix.Length)
+                    .Replace('/', Path.DirectorySeparatorChar));
+        }
+
         private static Version ReadFileVersion(string path)
         {
             string text = FileVersionInfo.GetVersionInfo(path).FileVersion;
@@ -742,6 +846,9 @@ namespace CodexPortableBootstrap
                 Guid.NewGuid().ToString("N");
             string stagingRoot = Path.Combine(portableRoot, stagingName);
             BootLog.Write(portableRoot, "extract begin dataExists=" + dataExists);
+            Dictionary<string, bool> payloadSkip = new Dictionary<string, bool>(
+                StringComparer.Ordinal);
+            LoadPayloadFingerprints(dataRoot, entries, payloadSkip);
             List<DerivedStateEntry> movedDerived = null;
             bool retainStaging = false;
             Mutex mutation = null;
@@ -758,6 +865,16 @@ namespace CodexPortableBootstrap
                     for (int i = 0; i < entries.Count; i++)
                     {
                         PayloadEntry item = entries[i];
+                        if (payloadSkip.ContainsKey(item.RelativePath))
+                        {
+                            completedBytes = checked(completedBytes +
+                                item.ArchiveEntry.Length);
+                            progress.UpdateProgress(completedBytes, totalBytes, i + 1,
+                                entries.Count);
+                            BootLog.Write(portableRoot,
+                                "payload skip (identical) " + item.RelativePath);
+                            continue;
+                        }
                         string staged = Path.Combine(stagingRoot,
                             item.RelativePath.Substring(DataPrefix.Length)
                                 .Replace('/', Path.DirectorySeparatorChar));
@@ -800,6 +917,7 @@ namespace CodexPortableBootstrap
                     if (PathExists(dataRoot))
                         throw new IOException("CodexData appeared while it was being prepared.");
                     Directory.Move(stagingRoot, dataRoot);
+                    SavePayloadFingerprints(dataRoot, entries);
                     return;
                 }
 
@@ -840,6 +958,12 @@ namespace CodexPortableBootstrap
                 for (int i = 0; i < entries.Count; i++)
                 {
                     PayloadEntry item = entries[i];
+                    if (payloadSkip.ContainsKey(item.RelativePath))
+                    {
+                        BootLog.Write(portableRoot,
+                            "committed (unchanged) " + item.RelativePath);
+                        continue;
+                    }
                     string staged = Path.Combine(stagingRoot,
                         item.RelativePath.Substring(DataPrefix.Length)
                             .Replace('/', Path.DirectorySeparatorChar));
@@ -880,6 +1004,7 @@ namespace CodexPortableBootstrap
                     if (progress != null) progress.Pump();
                     BootLog.Write(portableRoot, "committed " + item.RelativePath);
                 }
+                SavePayloadFingerprints(dataRoot, entries);
                 if (progress != null)
                     progress.UpdateStatus("正在准备 Codex Portable / Preparing Codex Portable");
                 BootLog.Write(portableRoot, "commit loop done");
@@ -1023,6 +1148,9 @@ namespace CodexPortableBootstrap
             List<string> relativePaths)
         {
             string packages = Path.Combine(stagingRoot, "packages");
+            // Fingerprint-skipped runs stage no package files at all; their
+            // marketplace trees are already installed and must not be moved.
+            if (!Directory.Exists(packages)) return;
             AddMarketplacePathsFromArchive(
                 Path.Combine(packages, "LFPortable-common.zip"),
                 "data/profile/.codex/offline-marketplaces/", relativePaths);
@@ -1082,6 +1210,10 @@ namespace CodexPortableBootstrap
             string prefix, List<string> relativePaths)
         {
             const string suffix = "/.agents/plugins/marketplace.json";
+            // The package may have been fingerprint-skipped this run (identical
+            // payload already installed), so the staged copy does not exist;
+            // its marketplace paths are already in place then.
+            if (!File.Exists(package)) return;
             using (FileStream stream = new FileStream(package, FileMode.Open,
                 FileAccess.Read, FileShare.Read))
             using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read, false))
